@@ -12,6 +12,89 @@ import pymupdf
 from PIL import Image, ImageOps, ImageDraw, ImageFont
 
 
+# Registry of available Windows fonts with style variants
+FONT_REGISTRY = {
+    "Arial": {
+        "regular": "C:/Windows/Fonts/arial.ttf",
+        "bold": "C:/Windows/Fonts/arialbd.ttf",
+        "italic": "C:/Windows/Fonts/ariali.ttf",
+        "bolditalic": "C:/Windows/Fonts/arialbi.ttf"
+    },
+    "Times New Roman": {
+        "regular": "C:/Windows/Fonts/times.ttf",
+        "bold": "C:/Windows/Fonts/timesbd.ttf",
+        "italic": "C:/Windows/Fonts/timesi.ttf",
+        "bolditalic": "C:/Windows/Fonts/timesbi.ttf"
+    },
+    "Calibri": {
+        "regular": "C:/Windows/Fonts/calibri.ttf",
+        "bold": "C:/Windows/Fonts/calibrib.ttf",
+        "italic": "C:/Windows/Fonts/calibrii.ttf",
+        "bolditalic": "C:/Windows/Fonts/calibriz.ttf"
+    },
+    "Segoe UI": {
+        "regular": "C:/Windows/Fonts/segoeui.ttf",
+        "bold": "C:/Windows/Fonts/segoeuib.ttf",
+        "italic": "C:/Windows/Fonts/segoeuii.ttf",
+        "bolditalic": "C:/Windows/Fonts/segoeuiz.ttf"
+    },
+    "Courier New": {
+        "regular": "C:/Windows/Fonts/cour.ttf",
+        "bold": "C:/Windows/Fonts/courbd.ttf",
+        "italic": "C:/Windows/Fonts/couri.ttf",
+        "bolditalic": "C:/Windows/Fonts/courbi.ttf"
+    },
+    "Georgia": {
+        "regular": "C:/Windows/Fonts/georgia.ttf",
+        "bold": "C:/Windows/Fonts/georgiab.ttf",
+        "italic": "C:/Windows/Fonts/georgiai.ttf",
+        "bolditalic": "C:/Windows/Fonts/georgiaz.ttf"
+    },
+    "Verdana": {
+        "regular": "C:/Windows/Fonts/verdana.ttf",
+        "bold": "C:/Windows/Fonts/verdanab.ttf",
+        "italic": "C:/Windows/Fonts/verdanai.ttf",
+        "bolditalic": "C:/Windows/Fonts/verdanaz.ttf"
+    },
+    "Comic Sans MS": {
+        "regular": "C:/Windows/Fonts/comic.ttf",
+        "bold": "C:/Windows/Fonts/comicbd.ttf",
+        "italic": "C:/Windows/Fonts/comici.ttf",
+        "bolditalic": "C:/Windows/Fonts/comicz.ttf"
+    },
+    "Brush Script MT": {
+        "regular": "C:/Windows/Fonts/BRUSHSCI.TTF",
+        "bold": "C:/Windows/Fonts/BRUSHSCI.TTF",
+        "italic": "C:/Windows/Fonts/BRUSHSCI.TTF",
+        "bolditalic": "C:/Windows/Fonts/BRUSHSCI.TTF"
+    },
+    "Ink Free": {
+        "regular": "C:/Windows/Fonts/Inkfree.ttf",
+        "bold": "C:/Windows/Fonts/Inkfree.ttf",
+        "italic": "C:/Windows/Fonts/Inkfree.ttf",
+        "bolditalic": "C:/Windows/Fonts/Inkfree.ttf"
+    }
+}
+
+
+def get_font_path(font_family: str, bold: bool = False, italic: bool = False) -> Optional[str]:
+    styles = FONT_REGISTRY.get(font_family)
+    if not styles:
+        return None
+    key = "regular"
+    if bold and italic:
+        key = "bolditalic"
+    elif bold:
+        key = "bold"
+    elif italic:
+        key = "italic"
+    
+    path = styles.get(key) or styles.get("regular")
+    if path and os.path.exists(path):
+        return path
+    return None
+
+
 @dataclass
 class PDFElement:
     """Represents an interactive visual element on a PDF page."""
@@ -26,7 +109,10 @@ class PDFElement:
     image_data: Optional[bytes] = None  # PNG bytes for signature / stamp / drawing
     text: str = ""
     font_size: float = 14.0
-    font_name: str = "helv"  # or 'times', 'courier'
+    font_family: str = "Arial"  # Arial, Times New Roman, Calibri, etc.
+    font_bold: bool = False
+    font_italic: bool = False
+    font_name: str = "helv"  # fallback
     color: str = "#000000"  # hex color
     bg_color: str = "#000000"  # for redaction / highlight
     opacity: float = 1.0  # 1.0 = opaque, 0.35 = highlight
@@ -83,6 +169,18 @@ class PDFEngine:
         self.doc.new_page(width=width, height=height)
         self.file_path = None
         self.elements = {0: []}
+        self.undo_stack.clear()
+
+    def close(self):
+        """Closes the document and releases resources."""
+        if self.doc:
+            try:
+                self.doc.close()
+            except Exception:
+                pass
+            self.doc = None
+        self.file_path = None
+        self.elements.clear()
         self.undo_stack.clear()
 
     @property
@@ -307,10 +405,17 @@ class PDFEngine:
                         page.insert_image(rect, stream=el.image_data)
 
                 elif el.element_type in ("text", "date"):
-                    # Insert text inside rect or at point
+                    # Insert text with custom font if available
                     rgb = self.hex_to_rgb_float(el.color)
-                    fontname = el.font_name if el.font_name in ("helv", "times", "couri") else "helv"
-                    # We can use insert_textbox for auto-wrap or insert_text
+                    font_path = get_font_path(el.font_family, el.font_bold, el.font_italic)
+                    
+                    if font_path and os.path.exists(font_path):
+                        internal_name = f"f_{el.id}"
+                        page.insert_font(fontname=internal_name, fontfile=font_path)
+                        fontname = internal_name
+                    else:
+                        fontname = el.font_name if el.font_name in ("helv", "times", "couri") else "helv"
+
                     page.insert_textbox(
                         rect,
                         el.text,

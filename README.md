@@ -42,16 +42,36 @@ All'avvio troverai già caricato un documento di prova (`esempio_contratto.pdf`)
 
 ---
 
-### 🔤 Modifica Contenuti e Testi
+### 🔤 Scrittura, Font Personalizzati e Modifica Testi
+- **Selezione Completa del Font**:
+  - Scegli tra i font tipografici più diffusi e apprezzati (*Arial*, *Times New Roman*, *Calibri*, *Segoe UI*, *Courier New*, *Georgia*, *Verdana*, *Comic Sans MS*, *Brush Script MT*, *Ink Free*).
+  - Regolazione dimensione carattere da 8pt a 72pt con anteprima in tempo reale.
+  - Stili di formattazione **Grassetto** e *Corsivo*.
+  - Palette colori istantanea (*Nero, Blu scuro, Rosso carminio, Verde smeraldo, Viola, Arancione*) più selettore colore personalizzato avanzato.
+  - I font scelti vengono **incorporati direttamente come font TrueType vettoriali nativi nel PDF esportato** garantendo massima nitidezza anche durante la stampa.
+- **Pannello Formattazione Rapida nella Barra Laterale**:
+  - Modifica font, grandezza, stile e colore di qualunque casella di testo selezionata in qualsiasi momento con un click.
 - **🧹 Evidenziatore Cancella-Scritto (Colore Foglio)**:
   - Strumento evoluto per **cancellare scritte, testi o porzioni del PDF campionando in tempo reale il colore reale del foglio**.
   - Rileva automaticamente la tonalità esatta dello sfondo circostante (bianco, avorio, crema o sfumature) e riempie l'area cancellata con quel colore esatto, rendendo la cancellazione perfettamente uniforme ed invisibile.
   - Funziona sia su singoli testi che su intere aree (timbri, linee, grafiche, scritte).
   - Rimozione permanente dal PDF con un semplice click o premendo **`Canc`** / **`Backspace`**.
   - **Supporto Annulla (Undo / `Ctrl + Z`)**: ogni cancellazione può essere annullata all'istante ripristinando il contenuto originale.
-- **Aggiungi Testo**: inserisci caselle di testo personalizzate, modificabili in tempo reale.
+- **Aggiungi Testo con Dialogo Grafico Dedicato**: inserisci annotazioni, clausole e note visuali con anteprima live.
 - **Inserisci Data Odierna**: pulsante rapido per apporre la data di oggi formattata (es. `22/11/2026`) accanto alla firma.
 - **Timbri Rapidi**: inserisci timbri grafici con bordo arrotondato e badge (*APPROVATO*, *FIRMATA*, *CONFORME ALL'ORIGINALE*, *BOZZA*, *PAGATO*, *RISERVATO*, *ANNULLATO*).
+
+---
+
+### 🎨 Nuova Interfaccia e Pulsanti ad Alta Visibilità
+- **Toolbar Superiore Riorganizzata ad Alto Contrasto**:
+  - Pulsanti principali con colori e icone tematiche immediatamente distinguibili (📂 *Apri* blu intenso, 💾 *Salva* verde smeraldo, 💾 *Salva con nome* ardesia, ↩️ *Annulla* ambra dorata).
+  - Sezione centrale dedicata con display pagina e tasti di cambio pagina rapidi.
+  - Controlli zoom raggruppati con indicatore percentuale sempre aggiornato.
+- **Barra Laterale Strumenti Riorganizzata in Schede Card**:
+  - Spazio allargato a 340px con sezioni visive ben separate e contrastate.
+  - Tasti primari maggiorati (altezza 44px) per *✍️ Inserisci Firma*, *🔤 Inserisci Testo*, e *🧹 Cancella / Gomma*.
+  - Scheda formattazione dedicata per personalizzare font e stile al volo.
 
 ---
 
@@ -95,8 +115,9 @@ All'avvio troverai già caricato un documento di prova (`esempio_contratto.pdf`)
 ---
 
 ## 📁 Struttura del Progetto
-- `main.py` & `app.py`: Interfaccia grafica CustomTkinter ed eventi interattivi del canvas.
+- `main.py` & `app.py`: Interfaccia grafica CustomTkinter, toolbar avanzata, pannello laterale ed eventi interattivi del canvas.
+- `text_dialog.py`: Finestra modale con selettore font avanzato, slider pt, stili grassetto/corsivo, palette colori e anteprima live.
 - `signature_dialog.py`: Finestra modale per disegnare, digitare o caricare firme con rimozione dello sfondo.
-- `pdf_engine.py`: Motore PDF basato su PyMuPDF per rendering ad alta definizione, vettorializzazione e salvataggio.
+- `pdf_engine.py`: Motore PDF basato su PyMuPDF con supporto font vettoriali Windows, rendering ad alta definizione e salvataggio.
 - `avvia.bat`: File di avvio rapido per Windows.
 - `esempio_contratto.pdf`: Documento di prova pronto per essere firmato e modificato.

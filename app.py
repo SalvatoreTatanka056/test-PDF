@@ -1,7 +1,8 @@
 """
 PDF Sign & Edit Studio - Programma visuale di visualizzazione, modifica e firma PDF.
 Interfaccia moderna CustomTkinter con supporto per disegno firma, firma calligrafica,
-caricamento immagine con trasparenza, caselle di testo, timbri, evidenziatore, censura e rotazione.
+caricamento immagine con trasparenza, caselle di testo con scelta font/dimensione/stile,
+timbri, evidenziatore che campiona il colore del foglio, censura, rotazione e undo.
 """
 
 import os
@@ -15,11 +16,12 @@ import customtkinter as ctk
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 import pymupdf
 
-from pdf_engine import PDFEngine, PDFElement
+from pdf_engine import PDFEngine, PDFElement, FONT_REGISTRY, get_font_path
 from signature_dialog import SignatureDialog
+from text_dialog import AddTextDialog, FONT_FAMILIES, COLOR_PALETTE
 
 # Setup CustomTkinter appearance
-ctk.set_appearance_mode("Dark")  # Modes: "System", "Dark", "Light"
+ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
 
@@ -28,8 +30,8 @@ class PDFEditorApp(ctk.CTk):
         super().__init__()
 
         self.title("PDF Sign & Edit Studio")
-        self.geometry("1300x850")
-        self.minsize(1050, 700)
+        self.geometry("1350x880")
+        self.minsize(1100, 720)
 
         # Engine
         self.engine = PDFEngine()
@@ -37,13 +39,18 @@ class PDFEditorApp(ctk.CTk):
         self.zoom_level = 1.25  # Base scale for crisp rendering
         
         # Interaction state
-        self.active_tool = "select"  # 'select', 'pen', 'highlight', 'redact'
-        self.selected_element: PDFElement = None
+        self.active_tool = "select"  # 'select', 'erase_paper_color', 'highlight', 'redact', 'pen'
+        self.selected_element: Optional[PDFElement] = None
         self.drag_data = {"x": 0, "y": 0, "elem_x": 0, "elem_y": 0, "resizing": False, "handle": None}
         
-        # Tool properties
+        # Writing and font state
+        self.current_font_family = "Arial"
+        self.current_font_size = 14.0
+        self.current_font_bold = False
+        self.current_font_italic = False
         self.current_text_color = "#000000"
-        self.current_font_size = 13.0
+
+        # Tool colors
         self.highlight_color = "#fef08a"  # Soft yellow
         self.redact_color = "#000000"     # Blackout
         self.pen_color = "#0b3c5d"
@@ -63,7 +70,7 @@ class PDFEditorApp(ctk.CTk):
 
         # Canvas items tracking
         self.page_image_tk = None
-        self.element_image_refs = {}  # Keep references to PhotoImage objects
+        self.element_image_refs = {}
         self.canvas_page_offset = (40, 40)
 
         # Build UI
@@ -81,27 +88,28 @@ class PDFEditorApp(ctk.CTk):
 
     # ================= UI SETUP =================
     def _build_menu_and_toolbar(self):
-        # Top toolbar
-        self.toolbar = ctk.CTkFrame(self, height=52, corner_radius=0, fg_color="#1e293b")
+        # Top toolbar: taller and with distinct colors for high visibility
+        self.toolbar = ctk.CTkFrame(self, height=62, corner_radius=0, fg_color="#0f172a")
         self.toolbar.pack(side="top", fill="x")
 
         # App branding / logo
         brand_lbl = ctk.CTkLabel(
             self.toolbar,
             text="📑 PDF Studio",
-            font=ctk.CTkFont(size=17, weight="bold"),
+            font=ctk.CTkFont(size=18, weight="bold"),
             text_color="#38bdf8"
         )
-        brand_lbl.pack(side="left", padx=(15, 20))
+        brand_lbl.pack(side="left", padx=(15, 18))
 
-        # File buttons
+        # File actions: highly visible primary buttons
         btn_open = ctk.CTkButton(
             self.toolbar,
             text="📂 Apri PDF",
-            width=90,
-            height=32,
-            fg_color="#334155",
-            hover_color="#475569",
+            width=105,
+            height=38,
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
+            font=ctk.CTkFont(size=13, weight="bold"),
             command=self.open_pdf_dialog
         )
         btn_open.pack(side="left", padx=4)
@@ -109,10 +117,11 @@ class PDFEditorApp(ctk.CTk):
         btn_save = ctk.CTkButton(
             self.toolbar,
             text="💾 Salva",
-            width=75,
-            height=32,
-            fg_color="#2563eb",
-            hover_color="#1d4ed8",
+            width=90,
+            height=38,
+            fg_color="#059669",
+            hover_color="#047857",
+            font=ctk.CTkFont(size=13, weight="bold"),
             command=self.save_pdf
         )
         btn_save.pack(side="left", padx=4)
@@ -120,103 +129,115 @@ class PDFEditorApp(ctk.CTk):
         btn_save_as = ctk.CTkButton(
             self.toolbar,
             text="💾 Salva con Nome",
-            width=125,
-            height=32,
+            width=135,
+            height=38,
             fg_color="#334155",
             hover_color="#475569",
+            font=ctk.CTkFont(size=12, weight="bold"),
             command=self.save_as_pdf
         )
         btn_save_as.pack(side="left", padx=4)
 
-        # Undo button
+        # Undo button (Amber)
         self.btn_undo = ctk.CTkButton(
             self.toolbar,
-            text="↩️ Annulla",
-            width=85,
-            height=32,
-            fg_color="#475569",
-            hover_color="#64748b",
+            text="↩️ Annulla (Ctrl+Z)",
+            width=130,
+            height=38,
+            fg_color="#d97706",
+            hover_color="#b45309",
+            font=ctk.CTkFont(size=12, weight="bold"),
             command=self.undo_action
         )
-        self.btn_undo.pack(side="left", padx=4)
+        self.btn_undo.pack(side="left", padx=6)
 
         # Separator
-        sep1 = ctk.CTkFrame(self.toolbar, width=2, height=28, fg_color="#475569")
-        sep1.pack(side="left", padx=10)
+        sep1 = ctk.CTkFrame(self.toolbar, width=2, height=36, fg_color="#334155")
+        sep1.pack(side="left", padx=8)
 
-        # Page navigation
+        # Page navigation center container
+        nav_frame = ctk.CTkFrame(self.toolbar, fg_color="#1e293b", corner_radius=8)
+        nav_frame.pack(side="left", padx=6, pady=8)
+
         btn_prev = ctk.CTkButton(
-            self.toolbar,
-            text="◀",
-            width=32,
-            height=32,
-            fg_color="#334155",
-            hover_color="#475569",
+            nav_frame,
+            text="◀ Prec",
+            width=70,
+            height=34,
+            fg_color="transparent",
+            hover_color="#334155",
+            font=ctk.CTkFont(size=12, weight="bold"),
             command=self.prev_page
         )
-        btn_prev.pack(side="left", padx=(2, 4))
+        btn_prev.pack(side="left", padx=(4, 2))
 
         self.lbl_page = ctk.CTkLabel(
-            self.toolbar,
+            nav_frame,
             text="Pagina 1 / 1",
             font=ctk.CTkFont(size=13, weight="bold"),
-            text_color="#f8fafc"
+            text_color="#f8fafc",
+            width=100
         )
         self.lbl_page.pack(side="left", padx=4)
 
         btn_next = ctk.CTkButton(
-            self.toolbar,
-            text="▶",
-            width=32,
-            height=32,
-            fg_color="#334155",
-            hover_color="#475569",
+            nav_frame,
+            text="Succ ▶",
+            width=70,
+            height=34,
+            fg_color="transparent",
+            hover_color="#334155",
+            font=ctk.CTkFont(size=12, weight="bold"),
             command=self.next_page
         )
-        btn_next.pack(side="left", padx=(4, 10))
+        btn_next.pack(side="left", padx=(2, 4))
 
         # Page tools
         btn_rot = ctk.CTkButton(
             self.toolbar,
-            text="🔄 Ruota 90°",
-            width=90,
-            height=32,
+            text="🔄 Ruota",
+            width=80,
+            height=38,
             fg_color="#334155",
             hover_color="#475569",
+            font=ctk.CTkFont(size=12),
             command=self.rotate_current_page
         )
-        btn_rot.pack(side="left", padx=4)
-
-        btn_del_page = ctk.CTkButton(
-            self.toolbar,
-            text="🗑️ Elimina Pagina",
-            width=110,
-            height=32,
-            fg_color="#7f1d1d",
-            hover_color="#991b1b",
-            command=self.delete_current_page
-        )
-        btn_del_page.pack(side="left", padx=4)
+        btn_rot.pack(side="left", padx=3)
 
         btn_add_page = ctk.CTkButton(
             self.toolbar,
-            text="➕ Nuova Pagina",
-            width=110,
-            height=32,
+            text="➕ Pagina",
+            width=90,
+            height=38,
             fg_color="#334155",
             hover_color="#475569",
+            font=ctk.CTkFont(size=12),
             command=self.add_blank_page
         )
-        btn_add_page.pack(side="left", padx=4)
+        btn_add_page.pack(side="left", padx=3)
+
+        btn_del_page = ctk.CTkButton(
+            self.toolbar,
+            text="🗑️ Elimina",
+            width=85,
+            height=38,
+            fg_color="#991b1b",
+            hover_color="#7f1d1d",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self.delete_current_page
+        )
+        btn_del_page.pack(side="left", padx=3)
 
         # Zoom controls (Right side)
         btn_zoom_in = ctk.CTkButton(
             self.toolbar,
             text="➕",
-            width=32,
-            height=32,
+            width=36,
+            height=38,
             fg_color="#334155",
             hover_color="#475569",
+            font=ctk.CTkFont(size=14, weight="bold"),
             command=self.zoom_in
         )
         btn_zoom_in.pack(side="right", padx=(2, 15))
@@ -224,29 +245,32 @@ class PDFEditorApp(ctk.CTk):
         self.lbl_zoom = ctk.CTkLabel(
             self.toolbar,
             text="125%",
-            font=ctk.CTkFont(size=12),
-            text_color="#cbd5e1"
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#cbd5e1",
+            width=46
         )
-        self.lbl_zoom.pack(side="right", padx=4)
+        self.lbl_zoom.pack(side="right", padx=2)
 
         btn_zoom_out = ctk.CTkButton(
             self.toolbar,
             text="➖",
-            width=32,
-            height=32,
+            width=36,
+            height=38,
             fg_color="#334155",
             hover_color="#475569",
+            font=ctk.CTkFont(size=14, weight="bold"),
             command=self.zoom_out
         )
-        btn_zoom_out.pack(side="right", padx=(10, 2))
+        btn_zoom_out.pack(side="right", padx=(4, 2))
 
         btn_zoom_fit = ctk.CTkButton(
             self.toolbar,
             text="↔️ Adatta",
-            width=70,
-            height=32,
+            width=80,
+            height=38,
             fg_color="#334155",
             hover_color="#475569",
+            font=ctk.CTkFont(size=12),
             command=self.zoom_fit_width
         )
         btn_zoom_fit.pack(side="right", padx=4)
@@ -256,10 +280,10 @@ class PDFEditorApp(ctk.CTk):
         self.main_container = ctk.CTkFrame(self, fg_color="#0f172a", corner_radius=0)
         self.main_container.pack(fill="both", expand=True)
 
-        # Left Sidebar (Tools)
+        # Left Sidebar (Tools: wider and spacious for readability)
         self.sidebar = ctk.CTkScrollableFrame(
             self.main_container,
-            width=280,
+            width=340,
             fg_color="#1e293b",
             corner_radius=0
         )
@@ -299,7 +323,7 @@ class PDFEditorApp(ctk.CTk):
         self.canvas.bind("<Control-MouseWheel>", self._on_ctrl_mouse_wheel)
 
         # Bottom status bar
-        self.status_bar = ctk.CTkFrame(self, height=26, corner_radius=0, fg_color="#0f172a")
+        self.status_bar = ctk.CTkFrame(self, height=28, corner_radius=0, fg_color="#090d16")
         self.status_bar.pack(side="bottom", fill="x")
 
         self.status_lbl = ctk.CTkLabel(
@@ -318,62 +342,69 @@ class PDFEditorApp(ctk.CTk):
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#38bdf8"
         )
-        sec_sign.pack(anchor="w", padx=10, pady=(15, 6))
+        sec_sign.pack(anchor="w", padx=12, pady=(15, 4))
+
+        card_sign = ctk.CTkFrame(self.sidebar, fg_color="#0f172a", corner_radius=8, border_width=1, border_color="#1e3a8a")
+        card_sign.pack(fill="x", padx=10, pady=4)
 
         btn_add_sign = ctk.CTkButton(
-            self.sidebar,
-            text="✍️ Crea / Inserisci Firma...",
+            card_sign,
+            text="✍️  AGGIUNGI FIRMA DIGITALE",
             font=ctk.CTkFont(size=13, weight="bold"),
-            height=40,
-            fg_color="#0284c7",
-            hover_color="#0369a1",
+            height=44,
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
             command=self.open_signature_dialog
         )
-        btn_add_sign.pack(fill="x", padx=10, pady=4)
+        btn_add_sign.pack(fill="x", padx=10, pady=(10, 4))
 
-        # SECTION 2: TESTO & DATI
+        lbl_sign_sub = ctk.CTkLabel(
+            card_sign,
+            text="Disegna a mano, calligrafia o carica foto",
+            font=ctk.CTkFont(size=11),
+            text_color="#94a3b8"
+        )
+        lbl_sign_sub.pack(anchor="center", pady=(0, 8))
+
+        # SECTION 2: TESTO & SCRITTURA CON SCELTA FONT
         sec_text = ctk.CTkLabel(
             self.sidebar,
-            text="🔤 TESTO & TIMBRI",
+            text="🔤 TESTO, CARATTERE & SCRITTURA",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#38bdf8"
         )
-        sec_text.pack(anchor="w", padx=10, pady=(18, 6))
+        sec_text.pack(anchor="w", padx=12, pady=(18, 4))
+
+        card_text = ctk.CTkFrame(self.sidebar, fg_color="#0f172a", corner_radius=8, border_width=1, border_color="#065f46")
+        card_text.pack(fill="x", padx=10, pady=4)
 
         btn_add_text = ctk.CTkButton(
-            self.sidebar,
-            text="🔤 Aggiungi Testo",
-            height=34,
-            fg_color="#334155",
-            hover_color="#475569",
+            card_text,
+            text="🔤  AGGIUNGI TESTO AL PDF",
+            height=42,
+            fg_color="#059669",
+            hover_color="#047857",
+            font=ctk.CTkFont(size=13, weight="bold"),
             command=self.add_text_element
         )
-        btn_add_text.pack(fill="x", padx=10, pady=3)
+        btn_add_text.pack(fill="x", padx=10, pady=(10, 4))
 
         btn_add_date = ctk.CTkButton(
-            self.sidebar,
-            text="📅 Inserisci Data Odierna",
+            card_text,
+            text="📅  Inserisci Data Odierna",
             height=34,
-            fg_color="#334155",
-            hover_color="#475569",
+            fg_color="#1e293b",
+            hover_color="#334155",
+            border_width=1,
+            border_color="#334155",
+            font=ctk.CTkFont(size=12, weight="bold"),
             command=self.add_date_element
         )
         btn_add_date.pack(fill="x", padx=10, pady=3)
 
-        btn_erase_text = ctk.CTkButton(
-            self.sidebar,
-            text="🧹 Evidenziatore Cancella (Colore Foglio)",
-            height=36,
-            fg_color="#991b1b",
-            hover_color="#b91c1c",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            command=self.activate_text_erase_mode
-        )
-        btn_erase_text.pack(fill="x", padx=10, pady=4)
-
         # Quick Stamp Dropdown
-        lbl_stamp = ctk.CTkLabel(self.sidebar, text="🏷️ Timbri Predefiniti:", font=ctk.CTkFont(size=11))
-        lbl_stamp.pack(anchor="w", padx=12, pady=(8, 2))
+        lbl_stamp = ctk.CTkLabel(card_text, text="🏷️ Timbri Predefiniti:", font=ctk.CTkFont(size=11))
+        lbl_stamp.pack(anchor="w", padx=12, pady=(6, 2))
 
         self.stamp_options = [
             "APPROVATO",
@@ -385,31 +416,175 @@ class PDFEditorApp(ctk.CTk):
             "ANNULLATO"
         ]
         self.stamp_menu = ctk.CTkOptionMenu(
-            self.sidebar,
+            card_text,
             values=self.stamp_options,
             command=self.add_stamp_element,
-            fg_color="#334155",
-            button_color="#475569"
+            fg_color="#1e293b",
+            button_color="#334155"
         )
         self.stamp_menu.set("Seleziona timbro...")
-        self.stamp_menu.pack(fill="x", padx=10, pady=3)
+        self.stamp_menu.pack(fill="x", padx=10, pady=(0, 10))
 
-        # SECTION 3: ANNOTAZIONI & CENSURA
-        sec_annot = ctk.CTkLabel(
+        # FONT SELECTION & FORMATTING BOX
+        font_box = ctk.CTkFrame(self.sidebar, fg_color="#0f172a", corner_radius=8, border_width=1, border_color="#334155")
+        font_box.pack(fill="x", padx=10, pady=6)
+
+        lbl_font_box_title = ctk.CTkLabel(
+            font_box,
+            text="🎨 FORMATTAZIONE FONT SCRITTURA",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#6ee7b7"
+        )
+        lbl_font_box_title.pack(anchor="w", padx=12, pady=(8, 4))
+
+        # Font Family dropdown
+        lbl_fam = ctk.CTkLabel(font_box, text="Tipo di Carattere (Font):", font=ctk.CTkFont(size=11))
+        lbl_fam.pack(anchor="w", padx=12, pady=(2, 2))
+
+        self.font_family_menu = ctk.CTkOptionMenu(
+            font_box,
+            values=FONT_FAMILIES,
+            command=self._on_font_family_changed,
+            fg_color="#1e293b",
+            button_color="#334155"
+        )
+        self.font_family_menu.set(self.current_font_family)
+        self.font_family_menu.pack(fill="x", padx=10, pady=2)
+
+        # Font Size row
+        size_row = ctk.CTkFrame(font_box, fg_color="transparent")
+        size_row.pack(fill="x", padx=10, pady=4)
+
+        lbl_sz_name = ctk.CTkLabel(size_row, text="Dimensione:", font=ctk.CTkFont(size=11))
+        lbl_sz_name.pack(side="left")
+
+        self.lbl_sidebar_size_val = ctk.CTkLabel(
+            size_row,
+            text=f"{int(self.current_font_size)} pt",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#38bdf8",
+            width=45
+        )
+        self.lbl_sidebar_size_val.pack(side="right")
+
+        self.slider_sidebar_font_size = ctk.CTkSlider(
+            font_box,
+            from_=8,
+            to=48,
+            number_of_steps=40,
+            command=self._on_font_size_changed
+        )
+        self.slider_sidebar_font_size.set(self.current_font_size)
+        self.slider_sidebar_font_size.pack(fill="x", padx=10, pady=2)
+
+        # Font Style (Bold / Italic)
+        style_row = ctk.CTkFrame(font_box, fg_color="transparent")
+        style_row.pack(fill="x", padx=10, pady=4)
+
+        self.bold_check_var = tk.BooleanVar(value=self.current_font_bold)
+        chk_bold = ctk.CTkCheckBox(
+            style_row,
+            text="Grassetto (B)",
+            variable=self.bold_check_var,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=self._on_font_style_changed
+        )
+        chk_bold.pack(side="left", padx=(0, 8))
+
+        self.italic_check_var = tk.BooleanVar(value=self.current_font_italic)
+        chk_italic = ctk.CTkCheckBox(
+            style_row,
+            text="Corsivo (I)",
+            variable=self.italic_check_var,
+            font=ctk.CTkFont(size=11, slant="italic"),
+            command=self._on_font_style_changed
+        )
+        chk_italic.pack(side="left")
+
+        # Color row
+        lbl_col_t = ctk.CTkLabel(font_box, text="Colore Inchiostro:", font=ctk.CTkFont(size=11))
+        lbl_col_t.pack(anchor="w", padx=12, pady=(4, 2))
+
+        col_row = ctk.CTkFrame(font_box, fg_color="transparent")
+        col_row.pack(fill="x", padx=10, pady=(2, 8))
+
+        for name, hx in COLOR_PALETTE[:5]:
+            btn = ctk.CTkButton(
+                col_row,
+                text="",
+                width=26,
+                height=26,
+                corner_radius=13,
+                fg_color=hx,
+                hover_color=hx,
+                border_width=2,
+                border_color="#475569",
+                command=lambda c=hx: self._on_text_color_chosen(c)
+            )
+            btn.pack(side="left", padx=2)
+
+        btn_pick_color = ctk.CTkButton(
+            col_row,
+            text="🎨",
+            width=32,
+            height=26,
+            fg_color="#1e293b",
+            hover_color="#334155",
+            border_width=1,
+            border_color="#475569",
+            command=self._open_custom_color_picker
+        )
+        btn_pick_color.pack(side="left", padx=4)
+
+        # SECTION 3: CANCELLAZIONE & GOMMA
+        sec_erase = ctk.CTkLabel(
             self.sidebar,
-            text="🖍️ ANNOTAZIONI & STRUMENTI",
+            text="🧹 CANCELLAZIONE & GOMMA",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#38bdf8"
         )
-        sec_annot.pack(anchor="w", padx=10, pady=(18, 6))
+        sec_erase.pack(anchor="w", padx=12, pady=(18, 4))
 
-        # Segmented tool mode selection
+        card_erase = ctk.CTkFrame(self.sidebar, fg_color="#0f172a", corner_radius=8, border_width=1, border_color="#7f1d1d")
+        card_erase.pack(fill="x", padx=10, pady=4)
+
+        btn_erase_text = ctk.CTkButton(
+            card_erase,
+            text="🧹  EVIDENZIATORE CANCELLA-SCRITTO",
+            height=44,
+            fg_color="#dc2626",
+            hover_color="#b91c1c",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self.activate_text_erase_mode
+        )
+        btn_erase_text.pack(fill="x", padx=10, pady=(10, 4))
+
+        lbl_erase_sub = ctk.CTkLabel(
+            card_erase,
+            text="Campiona colore del foglio e cancella",
+            font=ctk.CTkFont(size=11),
+            text_color="#fca5a5"
+        )
+        lbl_erase_sub.pack(anchor="center", pady=(0, 8))
+
+        # SECTION 4: STRUMENTI RAPIDI
+        sec_tools = ctk.CTkLabel(
+            self.sidebar,
+            text="🖍️ MODALITÀ STRUMENTI",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#38bdf8"
+        )
+        sec_tools.pack(anchor="w", padx=12, pady=(18, 4))
+
+        # Segmented tool mode selection (high visibility)
         self.tool_seg = ctk.CTkSegmentedButton(
             self.sidebar,
-            values=["Cursore", "Cancella / Gomma", "Evidenzia", "Censura", "Penna"],
-            command=self._on_tool_mode_changed
+            values=["👆 Cursore", "🧹 Gomma", "🖍️ Evidenzia", "⬛ Censura", "✏️ Penna"],
+            command=self._on_tool_mode_changed,
+            height=36,
+            font=ctk.CTkFont(size=11, weight="bold")
         )
-        self.tool_seg.set("Cursore")
+        self.tool_seg.set("👆 Cursore")
         self.tool_seg.pack(fill="x", padx=10, pady=4)
 
         # CARD FOR SELECTED TEXT / AREA TO ERASE
@@ -428,14 +603,14 @@ class PDFEditorApp(ctk.CTk):
             text="(Nessun testo selezionato)",
             font=ctk.CTkFont(size=11),
             text_color="#e0e7ff",
-            wraplength=230,
+            wraplength=280,
             justify="left"
         )
         self.lbl_selected_text_preview.pack(fill="x", padx=10, pady=2)
 
         self.lbl_paper_color_badge = ctk.CTkLabel(
             self.text_erase_card,
-            text="🎨 Colore foglio rilevato: #FFFFFF",
+            text="🎨 Colore foglio: #FFFFFF",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#38bdf8"
         )
@@ -447,7 +622,7 @@ class PDFEditorApp(ctk.CTk):
             fg_color="#dc2626",
             hover_color="#b91c1c",
             font=ctk.CTkFont(size=12, weight="bold"),
-            height=32,
+            height=34,
             command=lambda: self.delete_selected_text(with_paper_color=True)
         )
         self.btn_confirm_erase.pack(fill="x", padx=10, pady=3)
@@ -473,16 +648,16 @@ class PDFEditorApp(ctk.CTk):
         )
         self.btn_cancel_text_sel.pack(fill="x", padx=10, pady=(2, 8))
 
-        # SECTION 4: PROPRIETÀ ELEMENTO SELEZIONATO
+        # SECTION 5: PROPRIETÀ ELEMENTO SELEZIONATO
         sec_prop = ctk.CTkLabel(
             self.sidebar,
             text="⚙️ ELEMENTO SELEZIONATO",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#38bdf8"
         )
-        sec_prop.pack(anchor="w", padx=10, pady=(20, 6))
+        sec_prop.pack(anchor="w", padx=12, pady=(20, 4))
 
-        self.prop_card = ctk.CTkFrame(self.sidebar, fg_color="#0f172a", corner_radius=8)
+        self.prop_card = ctk.CTkFrame(self.sidebar, fg_color="#0f172a", corner_radius=8, border_width=1, border_color="#334155")
         self.prop_card.pack(fill="x", padx=10, pady=4)
 
         self.lbl_selected_info = ctk.CTkLabel(
@@ -498,7 +673,7 @@ class PDFEditorApp(ctk.CTk):
         self.slider_elem_scale = ctk.CTkSlider(
             self.prop_card,
             from_=30,
-            to=400,
+            to=450,
             command=self._on_element_size_slider
         )
 
@@ -513,18 +688,19 @@ class PDFEditorApp(ctk.CTk):
             text="🗑️ Elimina Elemento",
             fg_color="#b91c1c",
             hover_color="#991b1b",
-            height=30,
+            height=32,
+            font=ctk.CTkFont(size=12, weight="bold"),
             command=self.delete_selected_element
         )
 
-        # SECTION 5: MODIFICHE SULLA PAGINA CORRENTE
+        # SECTION 6: MODIFICHE SULLA PAGINA CORRENTE
         sec_list = ctk.CTkLabel(
             self.sidebar,
             text="📋 MODIFICHE PAGINA",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#38bdf8"
         )
-        sec_list.pack(anchor="w", padx=10, pady=(20, 6))
+        sec_list.pack(anchor="w", padx=12, pady=(20, 4))
 
         self.page_elements_listbox = tk.Listbox(
             self.sidebar,
@@ -535,7 +711,7 @@ class PDFEditorApp(ctk.CTk):
             bd=0,
             highlightthickness=1,
             highlightbackground="#334155",
-            height=5
+            height=4
         )
         self.page_elements_listbox.pack(fill="x", padx=10, pady=4)
         self.page_elements_listbox.bind("<<ListboxSelect>>", self._on_listbox_select)
@@ -548,7 +724,7 @@ class PDFEditorApp(ctk.CTk):
             height=28,
             command=self.clear_current_page_elements
         )
-        btn_clear_page.pack(fill="x", padx=10, pady=6)
+        btn_clear_page.pack(fill="x", padx=10, pady=(4, 15))
 
     def _bind_shortcuts(self):
         self.bind("<Control-o>", lambda e: self.open_pdf_dialog())
@@ -630,7 +806,6 @@ class PDFEditorApp(ctk.CTk):
         elements = self.engine.get_elements_for_page(self.current_page)
 
         for el in elements:
-            # Convert PDF points to canvas screen coordinates
             sx = ox + el.x * self.zoom_level
             sy = oy + el.y * self.zoom_level
             sw = el.width * self.zoom_level
@@ -640,7 +815,6 @@ class PDFEditorApp(ctk.CTk):
 
             if el.element_type in ("signature", "stamp"):
                 if el.image_data:
-                    # Open original image and scale to current zoom
                     raw_img = Image.open(io.BytesIO(el.image_data))
                     scaled_img = raw_img.resize((max(10, int(sw)), max(10, int(sh))), Image.Resampling.LANCZOS)
                     img_tk = ImageTk.PhotoImage(scaled_img)
@@ -648,12 +822,20 @@ class PDFEditorApp(ctk.CTk):
                     self.canvas.create_image(sx, sy, anchor="nw", image=img_tk, tags=(tag, "interactive"))
 
             elif el.element_type in ("text", "date"):
-                # Render text on canvas
+                # Render text on canvas with custom font family, size and styles
                 font_sz = max(8, int(el.font_size * self.zoom_level))
+                styles = []
+                if getattr(el, "font_bold", False):
+                    styles.append("bold")
+                if getattr(el, "font_italic", False):
+                    styles.append("italic")
+                style_str = " ".join(styles) if styles else "normal"
+                font_fam = getattr(el, "font_family", "Arial")
+
                 self.canvas.create_text(
                     sx, sy,
                     text=el.text,
-                    font=("Helvetica", font_sz),
+                    font=(font_fam, font_sz, style_str),
                     fill=el.color,
                     anchor="nw",
                     tags=(tag, "interactive")
@@ -668,7 +850,6 @@ class PDFEditorApp(ctk.CTk):
                 )
 
             elif el.element_type == "highlight":
-                # Stipple or semi-translucent rectangle
                 self.canvas.create_rectangle(
                     sx, sy, sx + sw, sy + sh,
                     fill=el.bg_color,
@@ -699,7 +880,6 @@ class PDFEditorApp(ctk.CTk):
 
             # Draw selection frame & handles if this element is selected
             if self.selected_element and self.selected_element.id == el.id:
-                # Bounding box
                 self.canvas.create_rectangle(
                     sx - 2, sy - 2, sx + sw + 2, sy + sh + 2,
                     outline="#38bdf8",
@@ -707,7 +887,6 @@ class PDFEditorApp(ctk.CTk):
                     dash=(4, 4),
                     tags="selection_box"
                 )
-                # Resize handle at bottom-right
                 handle_sz = 8
                 hx = sx + sw
                 hy = sy + sh
@@ -731,7 +910,7 @@ class PDFEditorApp(ctk.CTk):
         cy = self.canvas.canvasy(event.y)
         px, py = self._canvas_to_pdf_coords(cx, cy)
 
-        # 1. Text / Area Erase Mode (Higlight & Erase with paper color)
+        # 1. Text / Area Erase Mode (Highlight & Erase with paper color)
         if self.active_tool in ("erase_text", "erase_paper_color"):
             self.rect_start = (px, py, cx, cy)
             self.canvas.delete("text_sel_highlight")
@@ -772,7 +951,7 @@ class PDFEditorApp(ctk.CTk):
                 self.drag_data["elem_h"] = el.height
                 return
 
-        # Check if clicked inside any element on current page (top to bottom order)
+        # Check if clicked inside any element on current page
         clicked_elem = None
         elements = self.engine.get_elements_for_page(self.current_page)
         for el in reversed(elements):
@@ -787,6 +966,16 @@ class PDFEditorApp(ctk.CTk):
             self.drag_data["y"] = cy
             self.drag_data["elem_x"] = clicked_elem.x
             self.drag_data["elem_y"] = clicked_elem.y
+            
+            # Sync sidebar font format controls if text element
+            if clicked_elem.element_type in ("text", "date"):
+                self.font_family_menu.set(getattr(clicked_elem, "font_family", "Arial"))
+                self.slider_sidebar_font_size.set(clicked_elem.font_size)
+                self.lbl_sidebar_size_val.configure(text=f"{int(clicked_elem.font_size)} pt")
+                self.bold_check_var.set(getattr(clicked_elem, "font_bold", False))
+                self.italic_check_var.set(getattr(clicked_elem, "font_italic", False))
+                self.current_text_color = clicked_elem.color
+
             self.set_status(f"Elemento selezionato: {clicked_elem.element_type.capitalize()}. Trascina per spostarlo.")
         else:
             self.selected_element = None
@@ -857,7 +1046,6 @@ class PDFEditorApp(ctk.CTk):
         if self.drag_data.get("resizing") and self.selected_element:
             dx = (cx - self.drag_data["x"]) / self.zoom_level
             new_w = max(20.0, self.drag_data["elem_w"] + dx)
-            # Maintain aspect ratio for signatures/stamps
             if self.selected_element.element_type in ("signature", "stamp"):
                 aspect = self.drag_data["elem_h"] / max(1.0, self.drag_data["elem_w"])
                 new_h = new_w * aspect
@@ -973,7 +1161,7 @@ class PDFEditorApp(ctk.CTk):
 
             self.rect_start = None
             self.canvas.delete("temp_rect")
-            self.tool_seg.set("Cursore")
+            self.tool_seg.set("👆 Cursore")
             self.active_tool = "select"
             self._refresh_page_view()
             return
@@ -995,30 +1183,33 @@ class PDFEditorApp(ctk.CTk):
     # ================= TOOLS ACTIONS =================
     def _on_tool_mode_changed(self, mode):
         mapping = {
+            "👆 Cursore": "select",
             "Cursore": "select",
+            "🧹 Gomma": "erase_paper_color",
             "Cancella / Gomma": "erase_paper_color",
-            "Cancella Testo": "erase_paper_color",
+            "🖍️ Evidenzia": "highlight",
             "Evidenzia": "highlight",
-            "Evidenziatore": "highlight",
+            "⬛ Censura": "redact",
             "Censura": "redact",
+            "✏️ Penna": "pen",
             "Penna": "pen"
         }
         self.active_tool = mapping.get(mode, "select")
         if self.active_tool == "select":
             self.canvas.config(cursor="arrow")
-            self.set_status("Modalità Selezione: clicca e trascina per spostare o ridimensionare gli elementi.")
+            self.set_status("Modalità Cursore: clicca e trascina per spostare o ridimensionare gli elementi.")
         elif self.active_tool == "erase_paper_color":
             self.canvas.config(cursor="crosshair")
-            self.set_status("Evidenziatore Cancella-Scritto attivo: trascina sullo scritto per cancellarlo prendendo il colore del foglio.")
+            self.set_status("Evidenziatore Cancella-Scritto attivo: trascina sullo scritto per cancellarlo con il colore del foglio.")
         elif self.active_tool == "pen":
             self.canvas.config(cursor="pencil")
-            self.set_status("Modalità Penna: disegna direttamente sulla pagina PDF.")
+            self.set_status("Modalità Penna: disegna note a mano libera sulla pagina PDF.")
         else:
             self.canvas.config(cursor="crosshair")
             self.set_status(f"Modalità {mode}: trascina con il mouse per tracciare un rettangolo.")
 
     def activate_text_erase_mode(self):
-        self.tool_seg.set("Cancella / Gomma")
+        self.tool_seg.set("🧹 Gomma")
         self.active_tool = "erase_paper_color"
         self.canvas.config(cursor="crosshair")
         self.selected_element = None
@@ -1039,7 +1230,6 @@ class PDFEditorApp(ctk.CTk):
                 fill="#fdba74", stipple="gray25", outline="#ea580c", width=2, dash=(4, 2),
                 tags="text_sel_highlight"
             )
-            # Corner markers for selected area
             cs = 6
             for (cx, cy) in [(sx0, sy0), (sx1, sy0), (sx0, sy1), (sx1, sy1)]:
                 self.canvas.create_rectangle(
@@ -1068,7 +1258,6 @@ class PDFEditorApp(ctk.CTk):
             self.lbl_selected_text_preview.configure(text=f'"{preview}"')
             self.lbl_paper_color_badge.configure(text=f"🎨 Colore foglio: {self.sampled_paper_hex}")
             
-            # Show "Cancella solo testo" only if text was detected
             if self.selected_text_words:
                 self.btn_erase_only_text.pack(fill="x", padx=10, pady=2, before=self.btn_cancel_text_sel)
             else:
@@ -1131,19 +1320,18 @@ class PDFEditorApp(ctk.CTk):
         elif self.selected_element:
             self.delete_selected_element()
 
+    # ================= SIGNATURE ACTIONS =================
     def open_signature_dialog(self):
         SignatureDialog(self, on_signature_created_callback=self._on_signature_ready)
 
     def _on_signature_ready(self, pil_image: Image.Image, img_bytes: bytes):
-        # Calculate size in points
         aspect = pil_image.height / max(1, pil_image.width)
         w_points = 150.0
         h_points = w_points * aspect
 
-        # Place centered in visible viewport
         page_w, page_h = self.engine.get_page_size(self.current_page)
         px = max(20.0, (page_w - w_points) / 2)
-        py = max(20.0, page_h - h_points - 80.0)  # Near bottom by default
+        py = max(20.0, page_h - h_points - 80.0)
 
         new_el = PDFElement(
             id=self.engine.generate_id("sig"),
@@ -1157,34 +1345,95 @@ class PDFEditorApp(ctk.CTk):
         )
         self.engine.add_element(new_el)
         self.selected_element = new_el
-        self.set_status("Firma aggiunta! Trascinala per posizionarla esattamente dove desideri.")
+        self.set_status("Firma aggiunta! Trascinala per posizionarla dove desideri.")
         self._refresh_page_view()
 
+    # ================= TEXT & FONT SELECTION ACTIONS =================
     def add_text_element(self):
-        # Popup entry dialog
-        dialog = ctk.CTkInputDialog(
-            text="Inserisci il testo da posizionare sul PDF:",
-            title="Aggiungi Testo"
+        """Opens the rich text dialog with font family, size, styles, and color picker."""
+        AddTextDialog(
+            self,
+            initial_text="",
+            font_family=self.current_font_family,
+            font_size=self.current_font_size,
+            font_bold=self.current_font_bold,
+            font_italic=self.current_font_italic,
+            color=self.current_text_color,
+            callback=self._on_text_ready
         )
-        text = dialog.get_input()
-        if text and text.strip():
-            page_w, page_h = self.engine.get_page_size(self.current_page)
-            new_el = PDFElement(
-                id=self.engine.generate_id("txt"),
-                element_type="text",
-                page_index=self.current_page,
-                x=50.0,
-                y=100.0,
-                width=max(120.0, len(text) * 8.0),
-                height=25.0,
-                text=text.strip(),
-                font_size=self.current_font_size,
-                color=self.current_text_color
-            )
-            self.engine.add_element(new_el)
-            self.selected_element = new_el
-            self.set_status("Testo aggiunto. Trascinalo nella posizione desiderata.")
+
+    def _on_text_ready(self, text, font_family, font_size, font_bold, font_italic, color):
+        page_w, page_h = self.engine.get_page_size(self.current_page)
+        approx_w = max(90.0, len(text) * font_size * 0.65)
+        approx_h = max(25.0, font_size * 1.6)
+
+        new_el = PDFElement(
+            id=self.engine.generate_id("txt"),
+            element_type="text",
+            page_index=self.current_page,
+            x=max(40.0, (page_w - approx_w) / 2),
+            y=max(60.0, (page_h - approx_h) / 3),
+            width=approx_w,
+            height=approx_h,
+            text=text,
+            font_family=font_family,
+            font_size=font_size,
+            font_bold=font_bold,
+            font_italic=font_italic,
+            color=color
+        )
+        self.engine.add_element(new_el)
+        self.selected_element = new_el
+        
+        # Save last used font parameters
+        self.current_font_family = font_family
+        self.current_font_size = font_size
+        self.current_font_bold = font_bold
+        self.current_font_italic = font_italic
+        self.current_text_color = color
+        
+        # Sync sidebar font format controls
+        self.font_family_menu.set(font_family)
+        self.slider_sidebar_font_size.set(font_size)
+        self.lbl_sidebar_size_val.configure(text=f"{int(font_size)} pt")
+        self.bold_check_var.set(font_bold)
+        self.italic_check_var.set(font_italic)
+
+        self.set_status(f"Testo aggiunto con font '{font_family}' ({int(font_size)} pt). Trascinalo per posizionarlo.")
+        self._refresh_page_view()
+
+    def _on_font_family_changed(self, choice):
+        self.current_font_family = choice
+        if self.selected_element and self.selected_element.element_type in ("text", "date"):
+            self.selected_element.font_family = choice
             self._refresh_page_view()
+
+    def _on_font_size_changed(self, val):
+        self.current_font_size = float(val)
+        self.lbl_sidebar_size_val.configure(text=f"{int(self.current_font_size)} pt")
+        if self.selected_element and self.selected_element.element_type in ("text", "date"):
+            self.selected_element.font_size = self.current_font_size
+            self.selected_element.height = max(20.0, self.current_font_size * 1.6)
+            self._refresh_page_view()
+
+    def _on_font_style_changed(self):
+        self.current_font_bold = self.bold_check_var.get()
+        self.current_font_italic = self.italic_check_var.get()
+        if self.selected_element and self.selected_element.element_type in ("text", "date"):
+            self.selected_element.font_bold = self.current_font_bold
+            self.selected_element.font_italic = self.current_font_italic
+            self._refresh_page_view()
+
+    def _on_text_color_chosen(self, hex_color):
+        self.current_text_color = hex_color
+        if self.selected_element and self.selected_element.element_type in ("text", "date"):
+            self.selected_element.color = hex_color
+            self._refresh_page_view()
+
+    def _open_custom_color_picker(self):
+        col = colorchooser.askcolor(color=self.current_text_color, title="Scegli Colore Inchiostro")
+        if col and col[1]:
+            self._on_text_color_chosen(col[1])
 
     def add_date_element(self):
         today_str = datetime.date.today().strftime("%d/%m/%Y")
@@ -1194,11 +1443,14 @@ class PDFEditorApp(ctk.CTk):
             page_index=self.current_page,
             x=50.0,
             y=120.0,
-            width=100.0,
-            height=22.0,
+            width=110.0,
+            height=25.0,
             text=today_str,
-            font_size=12.0,
-            color="#1e293b"
+            font_family=self.current_font_family,
+            font_size=self.current_font_size,
+            font_bold=self.current_font_bold,
+            font_italic=self.current_font_italic,
+            color=self.current_text_color
         )
         self.engine.add_element(new_el)
         self.selected_element = new_el
@@ -1209,7 +1461,6 @@ class PDFEditorApp(ctk.CTk):
         if stamp_name not in self.stamp_options:
             return
         
-        # Color palettes for stamps
         colors = {
             "APPROVATO": "#16a34a",
             "FIRMATA": "#2563eb",
@@ -1221,7 +1472,6 @@ class PDFEditorApp(ctk.CTk):
         }
         color_hex = colors.get(stamp_name, "#2563eb")
 
-        # Generate stamp image
         w, h = 240, 80
         img = Image.new("RGBA", (w, h), (255, 255, 255, 0))
         d = ImageDraw.Draw(img)
@@ -1314,7 +1564,8 @@ class PDFEditorApp(ctk.CTk):
             return
         new_txt = self.entry_elem_text.get()
         self.selected_element.text = new_txt
-        self.selected_element.width = max(60.0, len(new_txt) * 8.5)
+        approx_w = max(60.0, len(new_txt) * self.selected_element.font_size * 0.65)
+        self.selected_element.width = approx_w
         self._refresh_page_view()
 
     def delete_selected_element(self):
@@ -1423,7 +1674,6 @@ class PDFEditorApp(ctk.CTk):
                 self.set_status(f"File salvato con successo: {os.path.basename(self.engine.file_path)}")
                 messagebox.showinfo("Salvataggio", "Documento salvato con successo!")
             except Exception as e:
-                # If cannot overwrite open file directly, suggest Save As
                 self.save_as_pdf()
         else:
             self.save_as_pdf()
