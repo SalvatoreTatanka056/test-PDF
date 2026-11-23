@@ -49,13 +49,15 @@ class PDFEditorApp(ctk.CTk):
         self.pen_width = 3.0
         self.freehand_points = []
         
-        # State for text selection and erasure
+        # State for text selection, area erasure and paper color sampling
         self.selected_text_words = []
         self.selected_text_rects = []
         self.selected_text_str = ""
         self.selected_area_rect = None
+        self.sampled_paper_color = (1.0, 1.0, 1.0)
+        self.sampled_paper_hex = "#FFFFFF"
 
-        # Rectangle drawing state for highlight / redact / erase_text
+        # Rectangle drawing state for highlight / redact / erase
         self.rect_start = None
 
         # Canvas items tracking
@@ -124,6 +126,18 @@ class PDFEditorApp(ctk.CTk):
             command=self.save_as_pdf
         )
         btn_save_as.pack(side="left", padx=4)
+
+        # Undo button
+        self.btn_undo = ctk.CTkButton(
+            self.toolbar,
+            text="↩️ Annulla",
+            width=85,
+            height=32,
+            fg_color="#475569",
+            hover_color="#64748b",
+            command=self.undo_action
+        )
+        self.btn_undo.pack(side="left", padx=4)
 
         # Separator
         sep1 = ctk.CTkFrame(self.toolbar, width=2, height=28, fg_color="#475569")
@@ -347,7 +361,7 @@ class PDFEditorApp(ctk.CTk):
 
         btn_erase_text = ctk.CTkButton(
             self.sidebar,
-            text="✂️ Seleziona & Cancella Testo",
+            text="🧹 Evidenziatore Cancella (Colore Foglio)",
             height=36,
             fg_color="#991b1b",
             hover_color="#b91c1c",
@@ -391,18 +405,18 @@ class PDFEditorApp(ctk.CTk):
         # Segmented tool mode selection
         self.tool_seg = ctk.CTkSegmentedButton(
             self.sidebar,
-            values=["Cursore", "Cancella Testo", "Evidenzia", "Censura", "Penna"],
+            values=["Cursore", "Cancella / Gomma", "Evidenzia", "Censura", "Penna"],
             command=self._on_tool_mode_changed
         )
         self.tool_seg.set("Cursore")
         self.tool_seg.pack(fill="x", padx=10, pady=4)
 
-        # CARD FOR SELECTED TEXT TO ERASE
+        # CARD FOR SELECTED TEXT / AREA TO ERASE
         self.text_erase_card = ctk.CTkFrame(self.sidebar, fg_color="#1e1b4b", corner_radius=8, border_width=1, border_color="#4338ca")
         
         lbl_te_title = ctk.CTkLabel(
             self.text_erase_card,
-            text="✂️ TESTO SELEZIONATO",
+            text="🧹 CANCELLA PARTE DEL PDF",
             font=ctk.CTkFont(size=12, weight="bold"),
             text_color="#a5b4fc"
         )
@@ -416,18 +430,37 @@ class PDFEditorApp(ctk.CTk):
             wraplength=230,
             justify="left"
         )
-        self.lbl_selected_text_preview.pack(fill="x", padx=10, pady=4)
+        self.lbl_selected_text_preview.pack(fill="x", padx=10, pady=2)
+
+        self.lbl_paper_color_badge = ctk.CTkLabel(
+            self.text_erase_card,
+            text="🎨 Colore foglio rilevato: #FFFFFF",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#38bdf8"
+        )
+        self.lbl_paper_color_badge.pack(anchor="w", padx=10, pady=2)
 
         self.btn_confirm_erase = ctk.CTkButton(
             self.text_erase_card,
-            text="🗑️ Cancella Testo Definitivo",
+            text="🗑️ Cancella con Colore Foglio",
             fg_color="#dc2626",
             hover_color="#b91c1c",
             font=ctk.CTkFont(size=12, weight="bold"),
             height=32,
-            command=self.delete_selected_text
+            command=lambda: self.delete_selected_text(with_paper_color=True)
         )
         self.btn_confirm_erase.pack(fill="x", padx=10, pady=3)
+
+        self.btn_erase_only_text = ctk.CTkButton(
+            self.text_erase_card,
+            text="✂️ Cancella Solo Testo",
+            fg_color="#475569",
+            hover_color="#64748b",
+            font=ctk.CTkFont(size=11),
+            height=28,
+            command=lambda: self.delete_selected_text(with_paper_color=False)
+        )
+        self.btn_erase_only_text.pack(fill="x", padx=10, pady=2)
 
         self.btn_cancel_text_sel = ctk.CTkButton(
             self.text_erase_card,
@@ -520,8 +553,12 @@ class PDFEditorApp(ctk.CTk):
         self.bind("<Control-o>", lambda e: self.open_pdf_dialog())
         self.bind("<Control-s>", lambda e: self.save_pdf())
         self.bind("<Control-S>", lambda e: self.save_as_pdf())
+        self.bind("<Control-z>", lambda e: self.undo_action())
+        self.bind("<Control-Z>", lambda e: self.undo_action())
         self.bind("<Delete>", lambda e: self._on_delete_key())
         self.bind("<BackSpace>", lambda e: self._on_delete_key())
+        self.canvas.bind("<Delete>", lambda e: self._on_delete_key())
+        self.canvas.bind("<BackSpace>", lambda e: self._on_delete_key())
         self.bind("<Left>", lambda e: self.prev_page())
         self.bind("<Right>", lambda e: self.next_page())
         self.bind("<Control-plus>", lambda e: self.zoom_in())
@@ -688,12 +725,13 @@ class PDFEditorApp(ctk.CTk):
         return (px, py)
 
     def _on_canvas_press(self, event):
+        self.canvas.focus_set()
         cx = self.canvas.canvasx(event.x)
         cy = self.canvas.canvasy(event.y)
         px, py = self._canvas_to_pdf_coords(cx, cy)
 
-        # 1. Text Erase Mode
-        if self.active_tool == "erase_text":
+        # 1. Text / Area Erase Mode (Higlight & Erase with paper color)
+        if self.active_tool in ("erase_text", "erase_paper_color"):
             self.rect_start = (px, py, cx, cy)
             self.canvas.delete("text_sel_highlight")
             self.canvas.delete("temp_sel_rect")
@@ -759,15 +797,15 @@ class PDFEditorApp(ctk.CTk):
         cy = self.canvas.canvasy(event.y)
         px, py = self._canvas_to_pdf_coords(cx, cy)
 
-        # Text selection drag
-        if self.active_tool == "erase_text" and self.rect_start:
+        # Text / Area selection drag (Highlighter eraser with paper color sampling)
+        if self.active_tool in ("erase_text", "erase_paper_color") and self.rect_start:
             start_px, start_py, start_cx, start_cy = self.rect_start
             self.canvas.delete("temp_sel_rect")
             self.canvas.delete("temp_word_highlight")
-            # Draw dashed selection rectangle
+            # Draw dashed selection rectangle with warm highlighter tint
             self.canvas.create_rectangle(
                 start_cx, start_cy, cx, cy,
-                fill="#93c5fd", outline="#2563eb", width=1, dash=(3, 3),
+                fill="#fed7aa", outline="#ea580c", width=2, dash=(4, 3),
                 stipple="gray25", tags="temp_sel_rect"
             )
             # Find and highlight intersecting words
@@ -783,7 +821,7 @@ class PDFEditorApp(ctk.CTk):
                     wy1 = oy + w[3] * self.zoom_level
                     self.canvas.create_rectangle(
                         wx0, wy0, wx1, wy1,
-                        fill="#3b82f6", stipple="gray50", outline="#1d4ed8", width=1,
+                        fill="#fb923c", stipple="gray50", outline="#c2410c", width=1,
                         tags="temp_word_highlight"
                     )
             return
@@ -844,8 +882,8 @@ class PDFEditorApp(ctk.CTk):
         cy = self.canvas.canvasy(event.y)
         px, py = self._canvas_to_pdf_coords(cx, cy)
 
-        # Text erase selection release
-        if self.active_tool == "erase_text" and self.rect_start:
+        # Text / Area erase selection release
+        if self.active_tool in ("erase_text", "erase_paper_color") and self.rect_start:
             start_px, start_py, _, _ = self.rect_start
             self.canvas.delete("temp_sel_rect")
             self.canvas.delete("temp_word_highlight")
@@ -855,21 +893,29 @@ class PDFEditorApp(ctk.CTk):
             y0, y1 = min(start_py, py), max(start_py, py)
             w, h = x1 - x0, y1 - y0
 
-            if w > 3 and h > 3:
+            if w > 2 and h > 2:
                 sel_rect = pymupdf.Rect(x0, y0, x1, y1)
+                
+                # Sample paper color
+                sampled_rgb = self.engine.sample_paper_color(self.current_page, sel_rect)
+                r, g, b = int(sampled_rgb[0] * 255), int(sampled_rgb[1] * 255), int(sampled_rgb[2] * 255)
+                hex_c = f"#{r:02X}{g:02X}{b:02X}"
+                self.sampled_paper_color = sampled_rgb
+                self.sampled_paper_hex = hex_c
+
                 words = self.engine.get_page_words(self.current_page)
                 matched = [w for w in words if sel_rect.intersects(pymupdf.Rect(w[:4]))]
 
+                self.selected_area_rect = sel_rect
+                self.selected_text_words = matched
+                self.selected_text_rects = [pymupdf.Rect(w[:4]) for w in matched]
+
                 if matched:
-                    self.selected_text_words = matched
-                    self.selected_text_rects = [pymupdf.Rect(w[:4]) for w in matched]
                     self.selected_text_str = " ".join(w[4] for w in matched)
-                    self.selected_area_rect = sel_rect
-                    self.set_status(f"Testo selezionato ({len(matched)} parole): '{self.selected_text_str}'. Premi Canc o 'Cancella Testo'.")
+                    self.set_status(f"Scritto selezionato ({len(matched)} parole). Colore foglio: {hex_c}. Premi [CANC] o 'Cancella con Colore Foglio'.")
                 else:
-                    self.selected_area_rect = sel_rect
-                    self.selected_text_str = "(Area rettangolare selezionata)"
-                    self.set_status("Area selezionata. Premi Canc o 'Cancella Testo' per rimuovere il contenuto.")
+                    self.selected_text_str = f"Parte del PDF ({int(w)}x{int(h)} pt)"
+                    self.set_status(f"Parte del PDF selezionata ({int(w)}x{int(h)} pt). Colore foglio: {hex_c}. Premi [CANC] per eliminare.")
 
                 self._draw_text_selection_highlights()
                 self._update_text_erase_card()
@@ -949,8 +995,10 @@ class PDFEditorApp(ctk.CTk):
     def _on_tool_mode_changed(self, mode):
         mapping = {
             "Cursore": "select",
-            "Cancella Testo": "erase_text",
+            "Cancella / Gomma": "erase_paper_color",
+            "Cancella Testo": "erase_paper_color",
             "Evidenzia": "highlight",
+            "Evidenziatore": "highlight",
             "Censura": "redact",
             "Penna": "pen"
         }
@@ -958,9 +1006,9 @@ class PDFEditorApp(ctk.CTk):
         if self.active_tool == "select":
             self.canvas.config(cursor="arrow")
             self.set_status("Modalità Selezione: clicca e trascina per spostare o ridimensionare gli elementi.")
-        elif self.active_tool == "erase_text":
-            self.canvas.config(cursor="xterm")
-            self.set_status("Modalità Cancella Testo: trascina un rettangolo sul testo del documento per selezionarlo ed eliminarlo.")
+        elif self.active_tool == "erase_paper_color":
+            self.canvas.config(cursor="crosshair")
+            self.set_status("Evidenziatore Cancella-Scritto attivo: trascina sullo scritto per cancellarlo prendendo il colore del foglio.")
         elif self.active_tool == "pen":
             self.canvas.config(cursor="pencil")
             self.set_status("Modalità Penna: disegna direttamente sulla pagina PDF.")
@@ -969,16 +1017,36 @@ class PDFEditorApp(ctk.CTk):
             self.set_status(f"Modalità {mode}: trascina con il mouse per tracciare un rettangolo.")
 
     def activate_text_erase_mode(self):
-        self.tool_seg.set("Cancella Testo")
-        self.active_tool = "erase_text"
-        self.canvas.config(cursor="xterm")
+        self.tool_seg.set("Cancella / Gomma")
+        self.active_tool = "erase_paper_color"
+        self.canvas.config(cursor="crosshair")
         self.selected_element = None
-        self.set_status("Modalità Cancella Testo attivata: trascina con il mouse sul testo da eliminare.")
+        self.set_status("Evidenziatore Cancella-Scritto attivo: trascina sullo scritto per cancellarlo con il colore del foglio.")
         self._refresh_page_view()
 
     def _draw_text_selection_highlights(self):
         self.canvas.delete("text_sel_highlight")
         ox, oy = self.canvas_page_offset
+        if self.selected_area_rect:
+            r = self.selected_area_rect
+            sx0 = ox + r.x0 * self.zoom_level
+            sy0 = oy + r.y0 * self.zoom_level
+            sx1 = ox + r.x1 * self.zoom_level
+            sy1 = oy + r.y1 * self.zoom_level
+            self.canvas.create_rectangle(
+                sx0, sy0, sx1, sy1,
+                fill="#fdba74", stipple="gray25", outline="#ea580c", width=2, dash=(4, 2),
+                tags="text_sel_highlight"
+            )
+            # Corner markers for selected area
+            cs = 6
+            for (cx, cy) in [(sx0, sy0), (sx1, sy0), (sx0, sy1), (sx1, sy1)]:
+                self.canvas.create_rectangle(
+                    cx - cs, cy - cs, cx + cs, cy + cs,
+                    fill="#ea580c", outline="#ffffff", width=1,
+                    tags="text_sel_highlight"
+                )
+
         if self.selected_text_rects:
             for r in self.selected_text_rects:
                 sx0 = ox + r.x0 * self.zoom_level
@@ -987,27 +1055,24 @@ class PDFEditorApp(ctk.CTk):
                 sy1 = oy + r.y1 * self.zoom_level
                 self.canvas.create_rectangle(
                     sx0, sy0, sx1, sy1,
-                    fill="#60a5fa", stipple="gray50", outline="#2563eb", width=1,
+                    fill="#fb923c", stipple="gray50", outline="#c2410c", width=1,
                     tags="text_sel_highlight"
                 )
-        elif self.selected_area_rect:
-            r = self.selected_area_rect
-            sx0 = ox + r.x0 * self.zoom_level
-            sy0 = oy + r.y0 * self.zoom_level
-            sx1 = ox + r.x1 * self.zoom_level
-            sy1 = oy + r.y1 * self.zoom_level
-            self.canvas.create_rectangle(
-                sx0, sy0, sx1, sy1,
-                fill="#f87171", stipple="gray25", outline="#dc2626", width=1,
-                tags="text_sel_highlight"
-            )
 
     def _update_text_erase_card(self):
-        if self.selected_text_str:
-            preview = self.selected_text_str
-            if len(preview) > 60:
-                preview = preview[:57] + "..."
+        if self.selected_text_str or self.selected_area_rect:
+            preview = self.selected_text_str or "Area selezionata"
+            if len(preview) > 55:
+                preview = preview[:52] + "..."
             self.lbl_selected_text_preview.configure(text=f'"{preview}"')
+            self.lbl_paper_color_badge.configure(text=f"🎨 Colore foglio: {self.sampled_paper_hex}")
+            
+            # Show "Cancella solo testo" only if text was detected
+            if self.selected_text_words:
+                self.btn_erase_only_text.pack(fill="x", padx=10, pady=2, before=self.btn_cancel_text_sel)
+            else:
+                self.btn_erase_only_text.pack_forget()
+
             self.text_erase_card.pack(fill="x", padx=10, pady=8, after=self.prop_card)
         else:
             self.lbl_selected_text_preview.configure(text="(Nessun testo selezionato)")
@@ -1022,30 +1087,46 @@ class PDFEditorApp(ctk.CTk):
         self.canvas.delete("temp_sel_rect")
         self.canvas.delete("temp_word_highlight")
         self._update_text_erase_card()
-        self.set_status("Selezione testo annullata.")
+        self.set_status("Selezione cancellata.")
 
-    def delete_selected_text(self):
+    def delete_selected_text(self, with_paper_color: bool = True):
         if not self.engine.is_open:
             return
 
-        if not self.selected_text_rects and not self.selected_area_rect:
-            messagebox.showinfo("Nessuna Selezione", "Seleziona prima il testo o l'area che desideri cancellare.")
+        if not self.selected_area_rect and not self.selected_text_rects:
+            messagebox.showinfo("Nessuna Selezione", "Seleziona prima lo scritto o l'area da cancellare.")
             return
 
-        deleted_info = self.selected_text_str
-        if self.selected_text_rects:
-            self.engine.erase_selected_words(self.current_page, self.selected_text_rects)
-            self.set_status(f"Testo eliminato definitivamente dal PDF: '{deleted_info}'")
+        deleted_info = self.selected_text_str or "Area selezionata"
+        color_info = self.sampled_paper_hex
+
+        if with_paper_color and self.selected_area_rect:
+            self.engine.erase_with_paper_color(self.current_page, self.selected_area_rect, custom_color=self.sampled_paper_color)
+            self.set_status(f"Scritto cancellato con successo col colore del foglio ({color_info}).")
+        elif self.selected_text_rects:
+            self.engine.erase_selected_words(self.current_page, self.selected_text_rects, fill_color=self.sampled_paper_color)
+            self.set_status(f"Testo eliminato dal PDF col colore del foglio: '{deleted_info}'")
         elif self.selected_area_rect:
-            self.engine.erase_rect_area(self.current_page, self.selected_area_rect)
-            self.set_status("Area selezionata eliminata dal PDF.")
+            self.engine.erase_rect_area(self.current_page, self.selected_area_rect, fill_color=self.sampled_paper_color)
+            self.set_status(f"Area cancellata con successo ({color_info}).")
 
         self.clear_text_selection()
         self._refresh_page_view()
 
+    def undo_action(self):
+        if not self.engine.is_open:
+            return
+        if self.engine.undo():
+            self.clear_text_selection()
+            self.selected_element = None
+            self.set_status("Operazione annullata con successo! Ripristinato stato precedente.")
+            self._refresh_page_view()
+        else:
+            self.set_status("Nessuna operazione da annullare.")
+
     def _on_delete_key(self, event=None):
-        if self.selected_text_rects or self.selected_area_rect:
-            self.delete_selected_text()
+        if self.selected_area_rect or self.selected_text_rects:
+            self.delete_selected_text(with_paper_color=True)
         elif self.selected_element:
             self.delete_selected_element()
 

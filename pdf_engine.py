@@ -40,6 +40,32 @@ class PDFEngine:
         self.file_path: Optional[str] = None
         self.elements: Dict[int, List[PDFElement]] = {}  # page_index -> list of elements
         self._element_counter = 0
+        self.undo_stack: List[Tuple[bytes, Dict[int, List[PDFElement]]]] = []
+
+    def push_undo(self):
+        """Saves current state for undo."""
+        if not self.is_open:
+            return
+        doc_bytes = self.doc.tobytes()
+        import copy
+        elements_copy = copy.deepcopy(self.elements)
+        self.undo_stack.append((doc_bytes, elements_copy))
+        if len(self.undo_stack) > 15:
+            self.undo_stack.pop(0)
+
+    def can_undo(self) -> bool:
+        return len(self.undo_stack) > 0
+
+    def undo(self) -> bool:
+        """Restores the previous document state."""
+        if not self.can_undo():
+            return False
+        doc_bytes, elements_copy = self.undo_stack.pop()
+        if self.doc:
+            self.doc.close()
+        self.doc = pymupdf.open("pdf", doc_bytes)
+        self.elements = elements_copy
+        return True
 
     def open_pdf(self, path: str) -> bool:
         """Opens a PDF file and initializes element storage."""
@@ -48,6 +74,7 @@ class PDFEngine:
         self.doc = pymupdf.open(path)
         self.file_path = path
         self.elements = {i: [] for i in range(len(self.doc))}
+        self.undo_stack.clear()
         return True
 
     def create_blank_pdf(self, width: float = 595.0, height: float = 842.0):
@@ -56,6 +83,7 @@ class PDFEngine:
         self.doc.new_page(width=width, height=height)
         self.file_path = None
         self.elements = {0: []}
+        self.undo_stack.clear()
 
     @property
     def is_open(self) -> bool:
@@ -131,21 +159,77 @@ class PDFEngine:
         """
         if not self.is_open or page_index < 0 or page_index >= self.page_count or not word_rects:
             return False
+        self.push_undo()
         page = self.doc[page_index]
         for r in word_rects:
             page.add_redact_annot(r, fill=fill_color)
         page.apply_redactions()
         return True
 
+    def sample_paper_color(self, page_index: int, rect: pymupdf.Rect) -> Tuple[float, float, float]:
+        """
+        Samples the surrounding background paper color near rect.
+        Returns (r, g, b) float tuple in 0.0 - 1.0 range.
+        """
+        if not self.is_open or page_index < 0 or page_index >= self.page_count:
+            return (1.0, 1.0, 1.0)
+        page = self.doc[page_index]
+        pix = page.get_pixmap()
+        w, h = pix.width, pix.height
+        x0, y0, x1, y1 = max(0, int(rect.x0)), max(0, int(rect.y0)), min(w - 1, int(rect.x1)), min(h - 1, int(rect.y1))
+
+        # Sample perimeter pixels (around the writing)
+        samples = []
+        points = [
+            (x0, max(0, y0 - 3)), (x1, max(0, y0 - 3)),
+            (min(w - 1, x1 + 3), (y0 + y1) // 2), (max(0, x0 - 3), (y0 + y1) // 2),
+            (x0, min(h - 1, y1 + 3)), (x1, min(h - 1, y1 + 3)),
+            (x0, y0), (x1, y1), ((x0 + x1) // 2, max(0, y0 - 2))
+        ]
+        for px, py in points:
+            if 0 <= px < w and 0 <= py < h:
+                samples.append(pix.pixel(px, py)[:3])
+
+        if not samples:
+            return (1.0, 1.0, 1.0)
+        # Select the brightest sample (paper background is typically brightest)
+        samples.sort(key=lambda c: 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2])
+        brightest = samples[-1]
+        return tuple(c / 255.0 for c in brightest)
+
+    def erase_with_paper_color(self, page_index: int, rect: pymupdf.Rect, custom_color: Optional[Tuple[float, float, float]] = None) -> Tuple[float, float, float]:
+        """
+        Erases writing and content inside rect, filling with the automatically
+        sampled paper color (or custom_color).
+        """
+        if not self.is_open or page_index < 0 or page_index >= self.page_count:
+            return (1.0, 1.0, 1.0)
+        
+        fill_col = custom_color if custom_color is not None else self.sample_paper_color(page_index, rect)
+        self.erase_rect_area(page_index, rect, fill_color=fill_col)
+        return fill_col
+
     def erase_rect_area(self, page_index: int, rect: pymupdf.Rect, fill_color: Tuple[float, float, float] = (1.0, 1.0, 1.0)) -> bool:
         """
-        Permanently redacts/erases all text and content within the given rectangle.
+        Permanently redacts/erases all text, graphics and content within the given rectangle,
+        and removes any user-added annotations/elements inside that region.
         """
         if not self.is_open or page_index < 0 or page_index >= self.page_count:
             return False
+        self.push_undo()
         page = self.doc[page_index]
         page.add_redact_annot(rect, fill=fill_color)
         page.apply_redactions()
+
+        # Also remove any added overlay elements in that area
+        if page_index in self.elements:
+            remaining = []
+            for el in self.elements[page_index]:
+                el_rect = pymupdf.Rect(el.x, el.y, el.x + el.width, el.y + el.height)
+                if not rect.intersects(el_rect):
+                    remaining.append(el)
+            self.elements[page_index] = remaining
+
         return True
 
     def rotate_page(self, page_index: int, degrees: int = 90):
@@ -269,7 +353,13 @@ class PDFEngine:
                             p2 = pymupdf.Point(el.points[i+1][0], el.points[i+1][1])
                             page.draw_line(p1, p2, color=rgb, width=el.line_width)
 
-        # Save document
-        self.doc.save(output_path, garbage=3, deflate=True)
-        # Re-open or update current path
+        # Save document cleanly using bytes buffer to prevent Windows in-place file lock issues
+        pdf_bytes = self.doc.tobytes(garbage=3, deflate=True)
+        self.doc.close()
+        with open(output_path, "wb") as f:
+            f.write(pdf_bytes)
+        
+        # Re-open document and reset elements
+        self.doc = pymupdf.open(output_path)
+        self.elements = {i: [] for i in range(len(self.doc))}
         self.file_path = output_path

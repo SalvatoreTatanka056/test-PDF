@@ -43,10 +43,12 @@ All'avvio troverai già caricato un documento di prova (`esempio_contratto.pdf`)
 ---
 
 ### 🔤 Modifica Contenuti e Testi
-- **✂️ Seleziona & Cancella Testo**:
-  - Modalità dedicata per selezionare con il mouse parole o blocchi di testo presenti nativamente nel PDF.
-  - Feedback visivo in tempo reale con evidenziazione azzurra delle parole intercettate.
-  - Rimozione permanente del testo dal content stream PDF premendo semplicemente il tasto **`Canc`** (o **`Backspace`**) oppure tramite il pulsante **"🗑️ Cancella Testo Definitivo"**.
+- **🧹 Evidenziatore Cancella-Scritto (Colore Foglio)**:
+  - Strumento evoluto per **cancellare scritte, testi o porzioni del PDF campionando in tempo reale il colore reale del foglio**.
+  - Rileva automaticamente la tonalità esatta dello sfondo circostante (bianco, avorio, crema o sfumature) e riempie l'area cancellata con quel colore esatto, rendendo la cancellazione perfettamente uniforme ed invisibile.
+  - Funziona sia su singoli testi che su intere aree (timbri, linee, grafiche, scritte).
+  - Rimozione permanente dal PDF con un semplice click o premendo **`Canc`** / **`Backspace`**.
+  - **Supporto Annulla (Undo / `Ctrl + Z`)**: ogni cancellazione può essere annullata all'istante ripristinando il contenuto originale.
 - **Aggiungi Testo**: inserisci caselle di testo personalizzate, modificabili in tempo reale.
 - **Inserisci Data Odierna**: pulsante rapido per apporre la data di oggi formattata (es. `22/11/2026`) accanto alla firma.
 - **Timbri Rapidi**: inserisci timbri grafici con bordo arrotondato e badge (*APPROVATO*, *FIRMATA*, *CONFORME ALL'ORIGINALE*, *BOZZA*, *PAGATO*, *RISERVATO*, *ANNULLATO*).
@@ -82,6 +84,7 @@ All'avvio troverai già caricato un documento di prova (`esempio_contratto.pdf`)
 | `Ctrl + O` | Apri documento PDF |
 | `Ctrl + S` | Salva modifiche |
 | `Ctrl + Shift + S` | Salva con nome |
+| `Ctrl + Z` | Annulla ultima cancellazione / operazione |
 | `Ctrl + +` / `Ctrl + -` | Zoom avanti / indietro |
 | `Ctrl + Rotella Mouse` | Zoom dinamico |
 | `Rotella Mouse` | Scorrimento verticale |
