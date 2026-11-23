@@ -13,6 +13,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, colorchooser
 import customtkinter as ctk
 from PIL import Image, ImageTk, ImageDraw, ImageFont
+import pymupdf
 
 from pdf_engine import PDFEngine, PDFElement
 from signature_dialog import SignatureDialog
