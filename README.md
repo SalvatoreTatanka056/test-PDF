@@ -43,6 +43,10 @@ All'avvio troverai già caricato un documento di prova (`esempio_contratto.pdf`)
 ---
 
 ### 🔤 Modifica Contenuti e Testi
+- **✂️ Seleziona & Cancella Testo**:
+  - Modalità dedicata per selezionare con il mouse parole o blocchi di testo presenti nativamente nel PDF.
+  - Feedback visivo in tempo reale con evidenziazione azzurra delle parole intercettate.
+  - Rimozione permanente del testo dal content stream PDF premendo semplicemente il tasto **`Canc`** (o **`Backspace`**) oppure tramite il pulsante **"🗑️ Cancella Testo Definitivo"**.
 - **Aggiungi Testo**: inserisci caselle di testo personalizzate, modificabili in tempo reale.
 - **Inserisci Data Odierna**: pulsante rapido per apporre la data di oggi formattata (es. `22/11/2026`) accanto alla firma.
 - **Timbri Rapidi**: inserisci timbri grafici con bordo arrotondato e badge (*APPROVATO*, *FIRMATA*, *CONFORME ALL'ORIGINALE*, *BOZZA*, *PAGATO*, *RISERVATO*, *ANNULLATO*).

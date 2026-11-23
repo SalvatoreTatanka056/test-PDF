@@ -49,7 +49,13 @@ class PDFEditorApp(ctk.CTk):
         self.pen_width = 3.0
         self.freehand_points = []
         
-        # Rectangle drawing state for highlight / redact
+        # State for text selection and erasure
+        self.selected_text_words = []
+        self.selected_text_rects = []
+        self.selected_text_str = ""
+        self.selected_area_rect = None
+
+        # Rectangle drawing state for highlight / redact / erase_text
         self.rect_start = None
 
         # Canvas items tracking
@@ -339,6 +345,17 @@ class PDFEditorApp(ctk.CTk):
         )
         btn_add_date.pack(fill="x", padx=10, pady=3)
 
+        btn_erase_text = ctk.CTkButton(
+            self.sidebar,
+            text="✂️ Seleziona & Cancella Testo",
+            height=36,
+            fg_color="#991b1b",
+            hover_color="#b91c1c",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self.activate_text_erase_mode
+        )
+        btn_erase_text.pack(fill="x", padx=10, pady=4)
+
         # Quick Stamp Dropdown
         lbl_stamp = ctk.CTkLabel(self.sidebar, text="🏷️ Timbri Predefiniti:", font=ctk.CTkFont(size=11))
         lbl_stamp.pack(anchor="w", padx=12, pady=(8, 2))
@@ -365,7 +382,7 @@ class PDFEditorApp(ctk.CTk):
         # SECTION 3: ANNOTAZIONI & CENSURA
         sec_annot = ctk.CTkLabel(
             self.sidebar,
-            text="🖍️ ANNOTAZIONI & CENSURA",
+            text="🖍️ ANNOTAZIONI & STRUMENTI",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#38bdf8"
         )
@@ -374,11 +391,53 @@ class PDFEditorApp(ctk.CTk):
         # Segmented tool mode selection
         self.tool_seg = ctk.CTkSegmentedButton(
             self.sidebar,
-            values=["Cursore", "Evidenzia", "Censura", "Penna"],
+            values=["Cursore", "Cancella Testo", "Evidenzia", "Censura", "Penna"],
             command=self._on_tool_mode_changed
         )
         self.tool_seg.set("Cursore")
         self.tool_seg.pack(fill="x", padx=10, pady=4)
+
+        # CARD FOR SELECTED TEXT TO ERASE
+        self.text_erase_card = ctk.CTkFrame(self.sidebar, fg_color="#1e1b4b", corner_radius=8, border_width=1, border_color="#4338ca")
+        
+        lbl_te_title = ctk.CTkLabel(
+            self.text_erase_card,
+            text="✂️ TESTO SELEZIONATO",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#a5b4fc"
+        )
+        lbl_te_title.pack(anchor="w", padx=10, pady=(8, 2))
+
+        self.lbl_selected_text_preview = ctk.CTkLabel(
+            self.text_erase_card,
+            text="(Nessun testo selezionato)",
+            font=ctk.CTkFont(size=11),
+            text_color="#e0e7ff",
+            wraplength=230,
+            justify="left"
+        )
+        self.lbl_selected_text_preview.pack(fill="x", padx=10, pady=4)
+
+        self.btn_confirm_erase = ctk.CTkButton(
+            self.text_erase_card,
+            text="🗑️ Cancella Testo Definitivo",
+            fg_color="#dc2626",
+            hover_color="#b91c1c",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            height=32,
+            command=self.delete_selected_text
+        )
+        self.btn_confirm_erase.pack(fill="x", padx=10, pady=3)
+
+        self.btn_cancel_text_sel = ctk.CTkButton(
+            self.text_erase_card,
+            text="Annulla Selezione",
+            fg_color="#374151",
+            hover_color="#4b5563",
+            height=26,
+            command=self.clear_text_selection
+        )
+        self.btn_cancel_text_sel.pack(fill="x", padx=10, pady=(2, 8))
 
         # SECTION 4: PROPRIETÀ ELEMENTO SELEZIONATO
         sec_prop = ctk.CTkLabel(
@@ -461,8 +520,8 @@ class PDFEditorApp(ctk.CTk):
         self.bind("<Control-o>", lambda e: self.open_pdf_dialog())
         self.bind("<Control-s>", lambda e: self.save_pdf())
         self.bind("<Control-S>", lambda e: self.save_as_pdf())
-        self.bind("<Delete>", lambda e: self.delete_selected_element())
-        self.bind("<BackSpace>", lambda e: self.delete_selected_element())
+        self.bind("<Delete>", lambda e: self._on_delete_key())
+        self.bind("<BackSpace>", lambda e: self._on_delete_key())
         self.bind("<Left>", lambda e: self.prev_page())
         self.bind("<Right>", lambda e: self.next_page())
         self.bind("<Control-plus>", lambda e: self.zoom_in())
@@ -520,6 +579,9 @@ class PDFEditorApp(ctk.CTk):
 
         # Render all page elements
         self._render_page_elements()
+
+        # Render text selection highlights if any
+        self._draw_text_selection_highlights()
 
         # Update sidebar list of elements
         self._refresh_elements_listbox()
@@ -630,17 +692,30 @@ class PDFEditorApp(ctk.CTk):
         cy = self.canvas.canvasy(event.y)
         px, py = self._canvas_to_pdf_coords(cx, cy)
 
-        # 1. Pen tool mode
+        # 1. Text Erase Mode
+        if self.active_tool == "erase_text":
+            self.rect_start = (px, py, cx, cy)
+            self.canvas.delete("text_sel_highlight")
+            self.canvas.delete("temp_sel_rect")
+            self.canvas.delete("temp_word_highlight")
+            self.selected_text_words.clear()
+            self.selected_text_rects.clear()
+            self.selected_text_str = ""
+            self.selected_area_rect = None
+            self._update_text_erase_card()
+            return
+
+        # 2. Pen tool mode
         if self.active_tool == "pen":
             self.freehand_points = [(px, py)]
             return
 
-        # 2. Highlight or Redaction drawing mode
+        # 3. Highlight or Redaction drawing mode
         if self.active_tool in ("highlight", "redact"):
             self.rect_start = (px, py, cx, cy)
             return
 
-        # 3. Selection / Movement mode
+        # 4. Selection / Movement mode
         # Check if clicked on resize handle of selected element
         if self.selected_element:
             ox, oy = self.canvas_page_offset
@@ -683,6 +758,35 @@ class PDFEditorApp(ctk.CTk):
         cx = self.canvas.canvasx(event.x)
         cy = self.canvas.canvasy(event.y)
         px, py = self._canvas_to_pdf_coords(cx, cy)
+
+        # Text selection drag
+        if self.active_tool == "erase_text" and self.rect_start:
+            start_px, start_py, start_cx, start_cy = self.rect_start
+            self.canvas.delete("temp_sel_rect")
+            self.canvas.delete("temp_word_highlight")
+            # Draw dashed selection rectangle
+            self.canvas.create_rectangle(
+                start_cx, start_cy, cx, cy,
+                fill="#93c5fd", outline="#2563eb", width=1, dash=(3, 3),
+                stipple="gray25", tags="temp_sel_rect"
+            )
+            # Find and highlight intersecting words
+            sel_rect = pymupdf.Rect(min(start_px, px), min(start_py, py), max(start_px, px), max(start_py, py))
+            words = self.engine.get_page_words(self.current_page)
+            ox, oy = self.canvas_page_offset
+            for w in words:
+                w_rect = pymupdf.Rect(w[0], w[1], w[2], w[3])
+                if sel_rect.intersects(w_rect):
+                    wx0 = ox + w[0] * self.zoom_level
+                    wy0 = oy + w[1] * self.zoom_level
+                    wx1 = ox + w[2] * self.zoom_level
+                    wy1 = oy + w[3] * self.zoom_level
+                    self.canvas.create_rectangle(
+                        wx0, wy0, wx1, wy1,
+                        fill="#3b82f6", stipple="gray50", outline="#1d4ed8", width=1,
+                        tags="temp_word_highlight"
+                    )
+            return
 
         # Pen drawing
         if self.active_tool == "pen" and self.freehand_points:
@@ -739,6 +843,37 @@ class PDFEditorApp(ctk.CTk):
         cx = self.canvas.canvasx(event.x)
         cy = self.canvas.canvasy(event.y)
         px, py = self._canvas_to_pdf_coords(cx, cy)
+
+        # Text erase selection release
+        if self.active_tool == "erase_text" and self.rect_start:
+            start_px, start_py, _, _ = self.rect_start
+            self.canvas.delete("temp_sel_rect")
+            self.canvas.delete("temp_word_highlight")
+            self.rect_start = None
+
+            x0, x1 = min(start_px, px), max(start_px, px)
+            y0, y1 = min(start_py, py), max(start_py, py)
+            w, h = x1 - x0, y1 - y0
+
+            if w > 3 and h > 3:
+                sel_rect = pymupdf.Rect(x0, y0, x1, y1)
+                words = self.engine.get_page_words(self.current_page)
+                matched = [w for w in words if sel_rect.intersects(pymupdf.Rect(w[:4]))]
+
+                if matched:
+                    self.selected_text_words = matched
+                    self.selected_text_rects = [pymupdf.Rect(w[:4]) for w in matched]
+                    self.selected_text_str = " ".join(w[4] for w in matched)
+                    self.selected_area_rect = sel_rect
+                    self.set_status(f"Testo selezionato ({len(matched)} parole): '{self.selected_text_str}'. Premi Canc o 'Cancella Testo'.")
+                else:
+                    self.selected_area_rect = sel_rect
+                    self.selected_text_str = "(Area rettangolare selezionata)"
+                    self.set_status("Area selezionata. Premi Canc o 'Cancella Testo' per rimuovere il contenuto.")
+
+                self._draw_text_selection_highlights()
+                self._update_text_erase_card()
+            return
 
         # Pen stroke finish
         if self.active_tool == "pen" and len(self.freehand_points) > 1:
@@ -814,6 +949,7 @@ class PDFEditorApp(ctk.CTk):
     def _on_tool_mode_changed(self, mode):
         mapping = {
             "Cursore": "select",
+            "Cancella Testo": "erase_text",
             "Evidenzia": "highlight",
             "Censura": "redact",
             "Penna": "pen"
@@ -822,12 +958,96 @@ class PDFEditorApp(ctk.CTk):
         if self.active_tool == "select":
             self.canvas.config(cursor="arrow")
             self.set_status("Modalità Selezione: clicca e trascina per spostare o ridimensionare gli elementi.")
+        elif self.active_tool == "erase_text":
+            self.canvas.config(cursor="xterm")
+            self.set_status("Modalità Cancella Testo: trascina un rettangolo sul testo del documento per selezionarlo ed eliminarlo.")
         elif self.active_tool == "pen":
             self.canvas.config(cursor="pencil")
             self.set_status("Modalità Penna: disegna direttamente sulla pagina PDF.")
         else:
             self.canvas.config(cursor="crosshair")
             self.set_status(f"Modalità {mode}: trascina con il mouse per tracciare un rettangolo.")
+
+    def activate_text_erase_mode(self):
+        self.tool_seg.set("Cancella Testo")
+        self.active_tool = "erase_text"
+        self.canvas.config(cursor="xterm")
+        self.selected_element = None
+        self.set_status("Modalità Cancella Testo attivata: trascina con il mouse sul testo da eliminare.")
+        self._refresh_page_view()
+
+    def _draw_text_selection_highlights(self):
+        self.canvas.delete("text_sel_highlight")
+        ox, oy = self.canvas_page_offset
+        if self.selected_text_rects:
+            for r in self.selected_text_rects:
+                sx0 = ox + r.x0 * self.zoom_level
+                sy0 = oy + r.y0 * self.zoom_level
+                sx1 = ox + r.x1 * self.zoom_level
+                sy1 = oy + r.y1 * self.zoom_level
+                self.canvas.create_rectangle(
+                    sx0, sy0, sx1, sy1,
+                    fill="#60a5fa", stipple="gray50", outline="#2563eb", width=1,
+                    tags="text_sel_highlight"
+                )
+        elif self.selected_area_rect:
+            r = self.selected_area_rect
+            sx0 = ox + r.x0 * self.zoom_level
+            sy0 = oy + r.y0 * self.zoom_level
+            sx1 = ox + r.x1 * self.zoom_level
+            sy1 = oy + r.y1 * self.zoom_level
+            self.canvas.create_rectangle(
+                sx0, sy0, sx1, sy1,
+                fill="#f87171", stipple="gray25", outline="#dc2626", width=1,
+                tags="text_sel_highlight"
+            )
+
+    def _update_text_erase_card(self):
+        if self.selected_text_str:
+            preview = self.selected_text_str
+            if len(preview) > 60:
+                preview = preview[:57] + "..."
+            self.lbl_selected_text_preview.configure(text=f'"{preview}"')
+            self.text_erase_card.pack(fill="x", padx=10, pady=8, after=self.prop_card)
+        else:
+            self.lbl_selected_text_preview.configure(text="(Nessun testo selezionato)")
+            self.text_erase_card.pack_forget()
+
+    def clear_text_selection(self):
+        self.selected_text_words.clear()
+        self.selected_text_rects.clear()
+        self.selected_text_str = ""
+        self.selected_area_rect = None
+        self.canvas.delete("text_sel_highlight")
+        self.canvas.delete("temp_sel_rect")
+        self.canvas.delete("temp_word_highlight")
+        self._update_text_erase_card()
+        self.set_status("Selezione testo annullata.")
+
+    def delete_selected_text(self):
+        if not self.engine.is_open:
+            return
+
+        if not self.selected_text_rects and not self.selected_area_rect:
+            messagebox.showinfo("Nessuna Selezione", "Seleziona prima il testo o l'area che desideri cancellare.")
+            return
+
+        deleted_info = self.selected_text_str
+        if self.selected_text_rects:
+            self.engine.erase_selected_words(self.current_page, self.selected_text_rects)
+            self.set_status(f"Testo eliminato definitivamente dal PDF: '{deleted_info}'")
+        elif self.selected_area_rect:
+            self.engine.erase_rect_area(self.current_page, self.selected_area_rect)
+            self.set_status("Area selezionata eliminata dal PDF.")
+
+        self.clear_text_selection()
+        self._refresh_page_view()
+
+    def _on_delete_key(self, event=None):
+        if self.selected_text_rects or self.selected_area_rect:
+            self.delete_selected_text()
+        elif self.selected_element:
+            self.delete_selected_element()
 
     def open_signature_dialog(self):
         SignatureDialog(self, on_signature_created_callback=self._on_signature_ready)

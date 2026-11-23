@@ -117,6 +117,37 @@ class PDFEngine:
         return f"{prefix}_{self._element_counter}"
 
     # Page manipulations
+    def get_page_words(self, page_index: int) -> List[Tuple]:
+        """Returns list of word tuples: (x0, y0, x1, y1, word, block_no, line_no, word_no)"""
+        if not self.is_open or page_index < 0 or page_index >= self.page_count:
+            return []
+        page = self.doc[page_index]
+        return page.get_text("words")
+
+    def erase_selected_words(self, page_index: int, word_rects: List[pymupdf.Rect], fill_color: Tuple[float, float, float] = (1.0, 1.0, 1.0)) -> bool:
+        """
+        Permanently redacts/erases specific word rectangles from the PDF content stream,
+        filling the area with the background color (default white).
+        """
+        if not self.is_open or page_index < 0 or page_index >= self.page_count or not word_rects:
+            return False
+        page = self.doc[page_index]
+        for r in word_rects:
+            page.add_redact_annot(r, fill=fill_color)
+        page.apply_redactions()
+        return True
+
+    def erase_rect_area(self, page_index: int, rect: pymupdf.Rect, fill_color: Tuple[float, float, float] = (1.0, 1.0, 1.0)) -> bool:
+        """
+        Permanently redacts/erases all text and content within the given rectangle.
+        """
+        if not self.is_open or page_index < 0 or page_index >= self.page_count:
+            return False
+        page = self.doc[page_index]
+        page.add_redact_annot(rect, fill=fill_color)
+        page.apply_redactions()
+        return True
+
     def rotate_page(self, page_index: int, degrees: int = 90):
         """Rotates a page clockwise by 90/180/270 degrees."""
         if not self.is_open or page_index < 0 or page_index >= self.page_count:
