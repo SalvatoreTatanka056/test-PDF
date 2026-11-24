@@ -42,7 +42,13 @@ All'avvio troverai già caricato un documento di prova (`esempio_contratto.pdf`)
 
 ---
 
-### 🔤 Scrittura, Font Personalizzati e Modifica Testi
+### 🔤 Scrittura, Font Personalizzati e Riconoscimento Font del Documento
+- **Rilevamento Automatico dei Font del PDF**:
+  - Il programma analizza istantaneamente il documento aperto e **rileva con precisione il tipo di font, la dimensione in punti (pt), il colore e gli stili (grassetto/corsivo)** utilizzati nel testo originale.
+  - Nella schermata di inserimento del testo viene mostrata una sezione dedicata **"📄 FONT RILEVATO NEL DOCUMENTO PDF"** con i dettagli dei caratteri originali e il pulsante rapido **"✨ Adotta Font del Documento"**.
+  - Un solo click imposta automaticamente il carattere, la dimensione esatta e il colore per scrivere in perfetta armonia tipografica con il resto del documento.
+  - Nella barra laterale è sempre visibile il badge con il font principale del foglio corrente e il tasto per adottarlo al volo su qualsiasi elemento selezionato.
+  - **Modifica Rapida con Doppio Click**: facendo doppio click su un testo nel canvas si riapre direttamente la schermata di personalizzazione.
 - **Selezione Completa del Font**:
   - Scegli tra i font tipografici più diffusi e apprezzati (*Arial*, *Times New Roman*, *Calibri*, *Segoe UI*, *Courier New*, *Georgia*, *Verdana*, *Comic Sans MS*, *Brush Script MT*, *Ink Free*).
   - Regolazione dimensione carattere da 8pt a 72pt con anteprima in tempo reale.

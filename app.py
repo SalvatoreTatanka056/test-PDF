@@ -316,6 +316,7 @@ class PDFEditorApp(ctk.CTk):
 
         # Canvas Mouse events
         self.canvas.bind("<Button-1>", self._on_canvas_press)
+        self.canvas.bind("<Double-Button-1>", self._on_canvas_double_click)
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
         self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)
@@ -436,6 +437,32 @@ class PDFEditorApp(ctk.CTk):
             text_color="#6ee7b7"
         )
         lbl_font_box_title.pack(anchor="w", padx=12, pady=(8, 4))
+
+        # Document font display card in sidebar
+        self.doc_font_card = ctk.CTkFrame(font_box, fg_color="#1e293b", corner_radius=6, border_width=1, border_color="#334155")
+        self.doc_font_card.pack(fill="x", padx=10, pady=(2, 6))
+
+        self.lbl_sidebar_doc_font = ctk.CTkLabel(
+            self.doc_font_card,
+            text="📄 Font Documento: In analisi...",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#93c5fd",
+            anchor="w",
+            justify="left",
+            wraplength=300
+        )
+        self.lbl_sidebar_doc_font.pack(fill="x", padx=8, pady=(4, 2))
+
+        self.btn_apply_doc_font = ctk.CTkButton(
+            self.doc_font_card,
+            text="🎯 Usa Font del Documento",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            height=26,
+            command=self._apply_doc_font_to_current
+        )
+        self.btn_apply_doc_font.pack(fill="x", padx=8, pady=(2, 6))
 
         # Font Family dropdown
         lbl_fam = ctk.CTkLabel(font_box, text="Tipo di Carattere (Font):", font=ctk.CTkFont(size=11))
@@ -897,6 +924,9 @@ class PDFEditorApp(ctk.CTk):
                     tags=("resize_handle", "selection_box")
                 )
 
+        # Update detected document fonts in sidebar
+        self._update_document_font_info()
+
     # ================= MOUSE & CANVAS INTERACTIONS =================
     def _canvas_to_pdf_coords(self, cx: float, cy: float) -> Tuple[float, float]:
         ox, oy = self.canvas_page_offset
@@ -1350,7 +1380,8 @@ class PDFEditorApp(ctk.CTk):
 
     # ================= TEXT & FONT SELECTION ACTIONS =================
     def add_text_element(self):
-        """Opens the rich text dialog with font family, size, styles, and color picker."""
+        """Opens the rich text dialog with font family, size, styles, color picker, and document fonts."""
+        detected = self.engine.get_document_fonts(self.current_page) if self.engine.is_open else []
         AddTextDialog(
             self,
             initial_text="",
@@ -1359,8 +1390,116 @@ class PDFEditorApp(ctk.CTk):
             font_bold=self.current_font_bold,
             font_italic=self.current_font_italic,
             color=self.current_text_color,
+            detected_fonts=detected,
             callback=self._on_text_ready
         )
+
+    def _update_document_font_info(self):
+        """Analyzes and updates the detected document font badge in the sidebar."""
+        if not hasattr(self, "lbl_sidebar_doc_font") or not self.engine.is_open:
+            return
+        
+        fonts = self.engine.get_document_fonts(self.current_page)
+        if fonts:
+            primary = fonts[0]
+            fam = primary.get("family", "Arial")
+            dom_sz = int(primary.get("dominant_size", 12))
+            raw_n = primary.get("raw_name", "N/A")
+            friendly = primary.get("friendly_name", raw_n)
+            self._current_doc_font = primary
+            self.lbl_sidebar_doc_font.configure(
+                text=f"📄 Font Documento:\n{friendly}\nMisura: ~{dom_sz} pt"
+            )
+            self.btn_apply_doc_font.configure(
+                state="normal",
+                text=f"🎯 Adotta: {fam} ({dom_sz} pt)"
+            )
+        else:
+            self._current_doc_font = None
+            self.lbl_sidebar_doc_font.configure(
+                text="📄 Font Documento:\nNessun testo vettoriale rilevato"
+            )
+            self.btn_apply_doc_font.configure(
+                state="disabled",
+                text="🎯 Nessun font rilevato"
+            )
+
+    def _apply_doc_font_to_current(self):
+        """Applies the detected document font style to current settings and selected element."""
+        if not hasattr(self, "_current_doc_font") or not self._current_doc_font:
+            return
+        primary = self._current_doc_font
+        fam = primary.get("family", "Arial")
+        dom_sz = int(primary.get("dominant_size", 12))
+        col = primary.get("color", "#000000")
+        is_b = primary.get("bold", False)
+        is_i = primary.get("italic", False)
+
+        if fam in FONT_FAMILIES:
+            self.current_font_family = fam
+            self.font_family_menu.set(fam)
+
+        self.current_font_size = dom_sz
+        self.slider_sidebar_font_size.set(dom_sz)
+        self.lbl_sidebar_size_val.configure(text=f"{dom_sz} pt")
+
+        self.bold_check_var.set(is_b)
+        self.current_font_bold = is_b
+        self.italic_check_var.set(is_i)
+        self.current_font_italic = is_i
+        self.current_text_color = col
+
+        if self.selected_element and self.selected_element.element_type == "text":
+            self.selected_element.font_family = fam
+            self.selected_element.font_size = float(dom_sz)
+            self.selected_element.font_bold = is_b
+            self.selected_element.font_italic = is_i
+            self.selected_element.color = col
+            self._refresh_page_view()
+
+        self.set_status(f"Adottato stile del documento: font '{fam}' ({dom_sz} pt, {col}).")
+
+    def _on_canvas_double_click(self, event):
+        """Allows double-clicking an existing text element to edit its text and font settings."""
+        if not self.engine.is_open or not self.selected_element:
+            return
+        if self.selected_element.element_type == "text":
+            el = self.selected_element
+            detected = self.engine.get_document_fonts(self.current_page) if self.engine.is_open else []
+            
+            def on_edit_ready(text, font_family, font_size, font_bold, font_italic, color):
+                el.text = text
+                el.font_family = font_family
+                el.font_size = font_size
+                el.font_bold = font_bold
+                el.font_italic = font_italic
+                el.color = color
+                el.width = max(90.0, len(text) * font_size * 0.65)
+                el.height = max(25.0, font_size * 1.6)
+                self.current_font_family = font_family
+                self.current_font_size = font_size
+                self.current_font_bold = font_bold
+                self.current_font_italic = font_italic
+                self.current_text_color = color
+                self.font_family_menu.set(font_family)
+                self.slider_sidebar_font_size.set(font_size)
+                self.lbl_sidebar_size_val.configure(text=f"{int(font_size)} pt")
+                self.bold_check_var.set(font_bold)
+                self.italic_check_var.set(font_italic)
+                self._refresh_page_view()
+                self.set_status(f"Testo modificato: font '{font_family}' ({int(font_size)} pt).")
+                
+            AddTextDialog(
+                self,
+                initial_text=el.text,
+                font_family=getattr(el, "font_family", "Arial"),
+                font_size=getattr(el, "font_size", 14),
+                font_bold=getattr(el, "font_bold", False),
+                font_italic=getattr(el, "font_italic", False),
+                color=getattr(el, "color", "#000000"),
+                detected_fonts=detected,
+                callback=on_edit_ready
+            )
 
     def _on_text_ready(self, text, font_family, font_size, font_bold, font_italic, color):
         page_w, page_h = self.engine.get_page_size(self.current_page)

@@ -242,6 +242,162 @@ class PDFEngine:
         self._element_counter += 1
         return f"{prefix}_{self._element_counter}"
 
+    def _map_pdf_font_to_family(self, font_name: str) -> Tuple[str, str]:
+        """
+        Maps a PDF internal font name (e.g. 'ABCDEF+TimesNewRomanPS-BoldMT', 'Helvetica')
+        to one of the supported FONT_REGISTRY families and provides a descriptive label.
+        """
+        import re
+        clean = re.sub(r'^[A-Z]{6}\+', '', font_name)
+        fn_lower = clean.lower().replace('-', '').replace(' ', '').replace('_', '')
+
+        if 'times' in fn_lower or 'roman' in fn_lower:
+            return 'Times New Roman', f"{clean} (Times New Roman)"
+        elif 'calibri' in fn_lower:
+            return 'Calibri', f"{clean} (Calibri)"
+        elif 'arial' in fn_lower:
+            return 'Arial', f"{clean} (Arial)"
+        elif 'helvetica' in fn_lower:
+            return 'Arial', f"{clean} (Compatibile con Arial)"
+        elif 'segoe' in fn_lower:
+            return 'Segoe UI', f"{clean} (Segoe UI)"
+        elif 'courier' in fn_lower:
+            return 'Courier New', f"{clean} (Courier New)"
+        elif 'georgia' in fn_lower:
+            return 'Georgia', f"{clean} (Georgia)"
+        elif 'verdana' in fn_lower:
+            return 'Verdana', f"{clean} (Verdana)"
+        elif 'comic' in fn_lower:
+            return 'Comic Sans MS', f"{clean} (Comic Sans)"
+        elif 'brush' in fn_lower:
+            return 'Brush Script MT', f"{clean} (Brush Script)"
+        elif 'inkfree' in fn_lower or 'ink free' in fn_lower:
+            return 'Ink Free', f"{clean} (Ink Free)"
+        elif 'consolas' in fn_lower:
+            return 'Courier New', f"{clean} (Monospazio Courier New)"
+        elif 'tahoma' in fn_lower:
+            return 'Segoe UI', f"{clean} (Simile a Segoe UI)"
+        elif 'cambria' in fn_lower or 'garamond' in fn_lower:
+            return 'Georgia', f"{clean} (Serif Georgia)"
+        elif 'trebuchet' in fn_lower:
+            return 'Segoe UI', f"{clean} (Segoe UI)"
+        else:
+            return 'Arial', clean
+
+    def get_document_fonts(self, page_index: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Analyzes and extracts all fonts used in the document (or a specific page),
+        including font name, mapped standard family, detected font sizes, colors,
+        and frequency/count of usage.
+        """
+        if not self.is_open:
+            return []
+
+        if page_index is not None and 0 <= page_index < self.page_count:
+            pages_to_check = [page_index]
+        else:
+            pages_to_check = range(self.page_count)
+
+        font_stats = {}
+
+        for p_idx in pages_to_check:
+            try:
+                page = self.doc[p_idx]
+                d = page.get_text("dict")
+                for b in d.get("blocks", []):
+                    for l in b.get("lines", []):
+                        for s in l.get("spans", []):
+                            raw_font = s.get("font", "").strip()
+                            if not raw_font:
+                                continue
+                            txt = s.get("text", "").strip()
+                            if not txt:
+                                continue
+                            
+                            size = round(s.get("size", 12.0), 1)
+                            c = s.get("color", 0)
+                            hex_color = f"#{(c>>16)&0xFF:02x}{(c>>8)&0xFF:02x}{c&0xFF:02x}"
+                            flags = s.get("flags", 0)
+                            is_italic = bool(flags & 2) or ("italic" in raw_font.lower()) or ("oblique" in raw_font.lower())
+                            is_bold = bool(flags & 16) or ("bold" in raw_font.lower()) or ("black" in raw_font.lower())
+
+                            if raw_font not in font_stats:
+                                font_stats[raw_font] = {
+                                    "raw_name": raw_font,
+                                    "count": 0,
+                                    "sizes": set(),
+                                    "colors": set(),
+                                    "bold": is_bold,
+                                    "italic": is_italic,
+                                    "samples": []
+                                }
+                            font_stats[raw_font]["count"] += len(txt)
+                            font_stats[raw_font]["sizes"].add(size)
+                            font_stats[raw_font]["colors"].add(hex_color)
+                            if is_bold:
+                                font_stats[raw_font]["bold"] = True
+                            if is_italic:
+                                font_stats[raw_font]["italic"] = True
+                            if len(font_stats[raw_font]["samples"]) < 2:
+                                font_stats[raw_font]["samples"].append(txt[:40])
+            except Exception:
+                pass
+
+        # Fallback to page.get_fonts() if no text spans were found
+        if not font_stats:
+            for p_idx in pages_to_check:
+                try:
+                    page = self.doc[p_idx]
+                    for f_info in page.get_fonts():
+                        basefont = f_info[3] if len(f_info) > 3 else ""
+                        if basefont and basefont not in font_stats:
+                            font_stats[basefont] = {
+                                "raw_name": basefont,
+                                "count": 1,
+                                "sizes": {12.0},
+                                "colors": {"#000000"},
+                                "bold": "bold" in basefont.lower(),
+                                "italic": "italic" in basefont.lower() or "oblique" in basefont.lower(),
+                                "samples": []
+                            }
+                except Exception:
+                    pass
+
+        results = []
+        for raw_name, st in font_stats.items():
+            mapped_fam, friendly_desc = self._map_pdf_font_to_family(raw_name)
+            sorted_sizes = sorted(list(st["sizes"]))
+            dominant_size = sorted_sizes[0] if sorted_sizes else 12.0
+            for sz in sorted_sizes:
+                if 9.5 <= sz <= 14.5:
+                    dominant_size = sz
+                    break
+
+            dominant_color = "#000000"
+            for col in st["colors"]:
+                if col.lower() in ("#000000", "#0f172a", "#1e293b", "#334155"):
+                    dominant_color = col
+                    break
+            else:
+                if st["colors"]:
+                    dominant_color = list(st["colors"])[0]
+
+            results.append({
+                "raw_name": raw_name,
+                "friendly_name": friendly_desc,
+                "family": mapped_fam,
+                "sizes": sorted_sizes,
+                "dominant_size": dominant_size,
+                "color": dominant_color,
+                "bold": st["bold"],
+                "italic": st["italic"],
+                "count": st["count"],
+                "samples": st["samples"]
+            })
+
+        results.sort(key=lambda x: x["count"], reverse=True)
+        return results
+
     # Page manipulations
     def get_page_words(self, page_index: int) -> List[Tuple]:
         """Returns list of word tuples: (x0, y0, x1, y1, word, block_no, line_no, word_no)"""
